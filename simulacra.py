@@ -111,12 +111,10 @@ class Flags:
 
 
 def do_gen_job(messages, interaction, job):
-    os.environ['CUDA_VISIBLE_DEVICES'] = job.device
     gen(job)
     messages.put((interaction,job))
 
 def do_upscale_job(messages, interaction, job):
-    os.environ['CUDA_VISIBLE_DEVICES'] = job.device
     upscale(job)
     messages.put((interaction,job))
         
@@ -160,6 +158,7 @@ class Jobs:
             self._gpu_table[device_index] = time.time()
             interaction, job = self._scheduled[next_job].pop()
             job.device = str(device_index)
+            os.environ['CUDA_VISIBLE_DEVICES'] = job.device
             if type(job) == UpscaleJob:
                 # Make values picklable
                 interaction = {"cid":interaction.channel.id,
