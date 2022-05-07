@@ -3,6 +3,8 @@ import time
 import random
 import io
 import json
+import torch
+from torch import multiprocessing as mp
 import sqlite3
 import asyncio
 import threading
@@ -107,23 +109,41 @@ class Flags:
         db.commit()
         db.close()
 
+
+def do_gen_job(messages, interaction, job):
+    os.environ['CUDA_VISIBLE_DEVICES'] = job.device
+    gen(job)
+    messages.put((interaction,job))
+
+def do_upscale_job(messages, interaction, job):
+    os.environ['CUDA_VISIBLE_DEVICES'] = job.device
+    upscale(job)
+    messages.put((interaction,job))
+        
         
 class Jobs:
     """Job controller for SimulacraBot"""
-    def __init__(self, gpus=1, dbpath='db.sqlite'):
-        self._gpu_table = [None for i in range(gpus)]
+    def __init__(self, dbpath='db.sqlite'):
+        self._gpu_table = [None for i in range(torch.cuda.device_count())]
         self._pending = queue.Queue()
         self._scheduled = {}
-        self._pending_sql = []
+        self._pending_messages = mp.Queue()
         self._dbpath = dbpath
         
-    def main(self):
+    async def main(self):
         while 1:
-            if self._pending_sql:
-                statement = self._pending_sql.pop()
+            if not self._pending_messages.empty():
+                response = self._pending_messages.get()
+                if type(response[1]) == UpscaleJob:
+                    query, params = await self.finish_upscale_job(response[0],
+                                                                  response[1])
+                else:
+                    query, params = await self.finish_gen_job(response[0],
+                                                              response[1])
+                
                 db = sqlite3.connect(self._dbpath)
                 cursor = db.cursor()
-                cursor.execute(statement[0], statement[1])
+                cursor.execute(query, params)
                 db.commit()
                 cursor.close()
                 db.close()
@@ -137,20 +157,26 @@ class Jobs:
                 time.sleep(0.25)
                 continue
             device_index = self._gpu_table.index(None)
-            device = "cuda:{}".format(device_index)
             self._gpu_table[device_index] = time.time()
             interaction, job = self._scheduled[next_job].pop()
-            job.device = device
+            job.device = str(device_index)
             if type(job) == UpscaleJob:
-                upscale_job = threading.Thread(
-                    target=asyncio.run,
-                    args=(self.do_upscale_job(interaction,job),)
+                # Make values picklable
+                interaction = {"cid":interaction.channel.id,
+                               "mention":interaction.user.mention}
+                upscale_job = mp.Process(
+                    target=do_upscale_job,
+                    args=(self._pending_messages,interaction,job)
                 )
                 upscale_job.start()
             else:
-                gen_job = threading.Thread(
-                    target=asyncio.run, 
-                    args=(self.do_gen_job(interaction,job),)
+                # Make values picklable
+                interaction = {"cid":interaction.channel.id,
+                               "mention":interaction.message.author.mention,
+                               "uid":interaction.message.author.id}
+                gen_job = mp.Process(
+                    target=do_gen_job, 
+                    args=(self._pending_messages,interaction,job)
                 )
                 gen_job.start()
 
@@ -170,42 +196,35 @@ class Jobs:
             return True
         else:
             return False
-
-    async def do_gen_job(self, interaction, job):
-        gen(job)
+        
+    async def finish_gen_job(self, interaction, job):
         view = GenerationButtons()
         embed = nextcord.Embed(title="Feedback", description="")
         embed.add_field(name="Ratings", value=0)
         embed.add_field(name="Flags", value=0)
         upload = nextcord.File(str(job.seed) + "_" + job.prompt.replace(" ", "_").replace("/","_") +
                                "_1" + ".png")
-        channel = bot.get_channel(interaction.channel.id)
+        channel = bot.get_channel(interaction["cid"])
         coroutine = channel.send(
-            job.prompt + f" by {interaction.message.author.mention}",
+            job.prompt + f" by {interaction['mention']}",
             embed=embed,
             file=upload, view=view)
         response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
-        self._pending_sql.append(
-            ("INSERT INTO generations VALUES (?, ?, ?, ?, ?)",
-             (job.seed, interaction.author.id, response.id, 2, job.prompt))
-        )
-        self._gpu_table[int(job.device.split(":")[1])] = None
+        self._gpu_table[int(job.device)] = None
+        return ("INSERT INTO generations VALUES (?, ?, ?, ?, ?)",
+                (job.seed, interaction["uid"], response.id, 2, job.prompt))
         
-        
-    async def do_upscale_job(self, interaction, job):
-        upscale(job)
+    async def finish_upscale_job(self, interaction, job):
         upload_path = job.input.replace(".png", "_4x_upscale.png")
         upload = nextcord.File(upload_path)
-        channel = bot.get_channel(interaction.channel.id)
+        channel = bot.get_channel(interaction["cid"])
         coroutine = channel.send(
-            "'" + job.prompt + f"' upscaled by {interaction.user.mention}",
+            "'" + job.prompt + f"' upscaled by {interaction['mention']}",
             file=upload
         )
         response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
-        self._pending_sql.append(("INSERT INTO upscales VALUES (?,?,?)",
-                                  (job.gen[0], job.index, 0)))
-        self._gpu_table[int(job.device.split(":")[1])] = None
-
+        self._gpu_table[int(job.device)] = None
+        return ("INSERT INTO upscales VALUES (?,?,?)", (job.gen[0], job.index, 0))
         
 TESTING_GUILD_ID = 958788735254822972  # Replace with your guild ID
 
@@ -227,7 +246,7 @@ class UpscaleJob:
 
 class GridButtons(nextcord.ui.View):
     def __init__(self, parent_msg):
-        super().__init__()
+        super().__init__(timeout=None)
         self.parent_msg = parent_msg
         self.value = None
     
@@ -288,7 +307,7 @@ class GridButtons(nextcord.ui.View):
 
 class GenerationButtons(nextcord.ui.View):
     def __init__(self):
-        super().__init__()
+        super().__init__(timeout=None)
         self.value = None
 
     async def rate(self, interaction, rating):
@@ -507,26 +526,30 @@ async def adduser(interaction: nextcord.Interaction):
         else:
             await interaction.message.author.send(f"Added '{name}' as normal user.")
 
-with open('channel_whitelist.txt') as infile:
-    channel_whitelist = [int(channel.strip()) for channel in infile.readlines()]
+if __name__ == '__main__' :
+            
+    with open('channel_whitelist.txt') as infile:
+        channel_whitelist = [int(channel.strip()) for channel in infile.readlines()]
         
-with open('banned_words.txt') as infile:
-    banned_words = [word.strip() for word in infile.readlines()]
+    with open('banned_words.txt') as infile:
+        banned_words = [word.strip() for word in infile.readlines()]
     
-with open('token.txt') as infile:
-    token = infile.read().strip()
+    with open('token.txt') as infile:
+        token = infile.read().strip()
 
-users = Users('db.sqlite')
-generations = Generations('db.sqlite')
-ratings = Ratings('db.sqlite')
-flags = Flags('db.sqlite')
-jobs = Jobs(1, 'db.sqlite')
+    mp.set_start_method('spawn')
+    
+    users = Users('db.sqlite')
+    generations = Generations('db.sqlite')
+    ratings = Ratings('db.sqlite')
+    flags = Flags('db.sqlite')
+    jobs = Jobs('db.sqlite')
 
-jobs_thread = threading.Thread(
-    target=jobs.main,
-    args=()
-)
-jobs_thread.start()
+    jobs_thread = threading.Thread(
+        target=asyncio.run,
+        args=(jobs.main(),)
+    )
+    jobs_thread.start()
 
-bot.run(token)
+    bot.run(token)
 

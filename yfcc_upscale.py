@@ -30,7 +30,7 @@ def main(args):
     p.add_argument('--device', type=str, default='cuda:0',
                    help='which CUDA device to use for the upscale')
     #args = p.parse_args()
-
+    
     model_parent = training.LightningDiffusion.load_from_checkpoint(args.checkpoint)
     model = model_parent.model_ema
     del model_parent
@@ -42,8 +42,8 @@ def main(args):
     side_x, side_y = low_res_pil.size[0] * 4, low_res_pil.size[1] * 4
 
     torch.manual_seed(args.seed)
-    noise = torch.randn([1, 3, side_y, side_x], device=args.device)
-    t = torch.linspace(1, 0, args.steps + 1, device=args.device)[:-1]
+    noise = torch.randn([1, 3, side_y, side_x], device="cuda:0")
+    t = torch.linspace(1, 0, args.steps + 1, device="cuda:0")[:-1]
     steps = utils.get_spliced_ddpm_cosine_schedule(t)
     outs = sampling.plms2_sample(model, noise, steps, {'low_res': low_res})
     outs = outs.add(1).div(2).clamp(0, 1)
