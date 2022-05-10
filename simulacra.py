@@ -134,21 +134,23 @@ class Jobs:
     async def main(self):
         while 1:
             if not self._pending_messages.empty():
+                db = sqlite3.connect(self._dbpath)
+                cursor = db.cursor()
                 response = self._pending_messages.get()
                 if type(response[1]) == UpscaleJob:
                     try:
                         query, params = await self.finish_upscale_job(response[0],
                                                                       response[1])
+                        cursor.execute(query, params)
                     except sqlite3.IntegrityError as e:
                         logging.warning("Duplicate upscale occurred - {}".format(str(e)))
+                        cursor.close()
+                        db.close()
                         continue
                 else:
                     query, params = await self.finish_gen_job(response[0],
                                                               response[1])
-                
-                db = sqlite3.connect(self._dbpath)
-                cursor = db.cursor()
-                cursor.execute(query, params)
+                    cursor.execute(query, params)
                 db.commit()
                 cursor.close()
                 db.close()
