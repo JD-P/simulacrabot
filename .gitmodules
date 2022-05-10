@@ -1,0 +1,15 @@
+[submodule "latent-diffusion"]
+	path = latent-diffusion
+	url = https://github.com/crowsonkb/latent-diffusion
+[submodule "v-diffusion-pytorch"]
+	path = v-diffusion-pytorch
+	url = https://github.com/crowsonkb/v-diffusion-pytorch.git
+[submodule "CLIP"]
+	path = CLIP
+	url = https://github.com/openai/CLIP/
+[submodule "cloob-training"]
+	path = cloob-training
+	url = https://github.com/crowsonkb/cloob-training
+[submodule "taming-transformers"]
+	path = taming-transformers
+	url = https://github.com/CompVis/taming-transformers
