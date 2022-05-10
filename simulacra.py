@@ -5,6 +5,7 @@ import io
 import json
 import torch
 from torch import multiprocessing as mp
+import logging
 import sqlite3
 import asyncio
 import threading
@@ -14,6 +15,8 @@ from nextcord.ext import commands
 from simulacra_glide_sample import main as gen
 from yfcc_upscale import main as upscale
 from collections import namedtuple
+
+logging.basicConfig(filename='simulacra.log', encoding='utf-8', level=logging.WARNING)
 
 if not os.path.exists("db.sqlite"):
     db = sqlite3.connect('db.sqlite')
@@ -133,8 +136,12 @@ class Jobs:
             if not self._pending_messages.empty():
                 response = self._pending_messages.get()
                 if type(response[1]) == UpscaleJob:
-                    query, params = await self.finish_upscale_job(response[0],
-                                                                  response[1])
+                    try:
+                        query, params = await self.finish_upscale_job(response[0],
+                                                                      response[1])
+                    except sqlite3.IntegrityError as e:
+                        logging.warning("Duplicate upscale occurred - {}".format(str(e)))
+                        continue
                 else:
                     query, params = await self.finish_gen_job(response[0],
                                                               response[1])
@@ -146,6 +153,11 @@ class Jobs:
                 cursor.close()
                 db.close()
             if None not in self._gpu_table:
+                for job_time in enumerate(self._gpu_table):
+                    # Clear out stuck job registers/timeout                   
+                    i,t = job_time
+                    if (time.time() - t) >= 120:
+                        self._gpu_table[i] = None
                 time.sleep(0.25)
                 continue
             # Job dispatch
