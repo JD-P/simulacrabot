@@ -18,6 +18,7 @@ First we git clone this repository and set up our virtual environment.
 git clone --recursive https://github.com/JD-P/simulacrabot
 cd simulacrabot/
 python3 -m venv env_simulacra
+source env_simulacra/bin/activate
 ```
 
 Then we pip install our dependencies.
