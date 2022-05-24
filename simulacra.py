@@ -1,6 +1,6 @@
 import os
 import time
-import random
+import secrets
 import io
 import json
 import torch
@@ -26,23 +26,29 @@ if not os.path.exists("db.sqlite"):
                        verified INTEGER, name TEXT)''')
     cursor.execute("INSERT INTO users VALUES (621583764174143488, 1, 0, 1, 'John David Pressman')")
     cursor.execute('''CREATE TABLE generations
-                      (id INTEGER PRIMARY KEY, uid INTEGER, mid INTEGER, 
-                       method INTEGER, prompt TEXT, 
-                       FOREIGN KEY(uid) REFERENCES users(id))''')
+                           (id INTEGER PRIMARY KEY, uid INTEGER, mid INTEGER, 
+                           method INTEGER, prompt TEXT, 
+                           FOREIGN KEY(uid) REFERENCES users(id))''')
+    cursor.execute('''CREATE TABLE images
+                           (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                           gid INTEGER,
+                           idx INTEGER,
+                           FOREIGN KEY(gid) REFERENCES generations(id),
+                           UNIQUE(gid,idx))''')
     cursor.execute('''CREATE TABLE ratings
-                      (uid INTEGER, gid INTEGER, rating INTEGER,
-                       FOREIGN KEY(uid) REFERENCES users(id),
-                       FOREIGN KEY(gid) REFERENCES generations(id),
-                       PRIMARY KEY(uid, gid))''')
+                           (uid INTEGER, iid INTEGER, rating INTEGER,
+                           FOREIGN KEY(uid) REFERENCES users(id),
+                           FOREIGN KEY(iid) REFERENCES images(id),
+                           PRIMARY KEY(uid, iid))''')
     cursor.execute('''CREATE TABLE flags
-                      (uid INTEGER, gid INTEGER, 
-                       FOREIGN KEY(uid) REFERENCES users(id),
-                       FOREIGN KEY(gid) REFERENCES generations(id),
-                       PRIMARY KEY(uid, gid))''')
+                           (uid INTEGER, iid INTEGER, 
+                           FOREIGN KEY(uid) REFERENCES users(id),
+                           FOREIGN KEY(iid) REFERENCES images(id),
+                           PRIMARY KEY(uid, iid))''')
     cursor.execute('''CREATE TABLE upscales
-                      (gid INTEGER, choice INTEGER, method INTEGER,
-                       FOREIGN KEY(gid) REFERENCES generations(id),
-                       PRIMARY KEY(gid, choice))''')
+                           (iid INTEGER, method INTEGER,
+                           FOREIGN KEY(iid) REFERENCES images(id),
+                           PRIMARY KEY(iid))''')
     db.commit()
     cursor.close()
 
@@ -93,10 +99,13 @@ class Ratings:
     def __init__(self, dbpath):
         self.dbpath = dbpath
         
-    def record_rating(self, uid: int, gid: int, rating: int):
+    def record_rating(self, uid: int, gid: int, rating: int, index: int = 1):
         db = sqlite3.connect(self.dbpath)
         cursor = db.cursor()
-        cursor.execute("INSERT INTO ratings VALUES (?,?,?)", (uid, gid, rating))
+        cursor.execute("SELECT id FROM images WHERE gid=? AND idx=?",
+                       (gid, index))
+        image_id = cursor.fetchone()[0]
+        cursor.execute("INSERT INTO ratings VALUES (?,?,?)", (uid, image_id, rating))
         db.commit()
         db.close()
 
@@ -105,10 +114,13 @@ class Flags:
     def __init__(self, dbpath):
         self.dbpath = dbpath
 
-    def record_flag(self, uid: int, gid: int):
+    def record_flag(self, uid: int, gid: int, index: int = 1):
         db = sqlite3.connect(self.dbpath)
         cursor = db.cursor()
-        cursor.execute("INSERT INTO flags VALUES (?,?)", (uid, gid))
+        cursor.execute("SELECT id FROM images WHERE gid=? AND idx=?",
+                       (gid, index))
+        image_id = cursor.fetchone()[0]
+        cursor.execute("INSERT INTO flags VALUES (?,?)", (uid, image_id))
         db.commit()
         db.close()
 
@@ -124,14 +136,16 @@ def do_upscale_job(messages, interaction, job):
         
 class Jobs:
     """Job controller for SimulacraBot"""
-    def __init__(self, dbpath='db.sqlite'):
+    def __init__(self, channels, dbpath='db.sqlite'):
         self._gpu_table = [None for i in range(torch.cuda.device_count())]
         self._pending = queue.Queue()
         self._scheduled = {}
         self._pending_messages = mp.Queue()
         self._dbpath = dbpath
+        self._channels = channels
         
     async def main(self):
+        last_rate_prompt = time.time()
         while 1:
             if not self._pending_messages.empty():
                 db = sqlite3.connect(self._dbpath)
@@ -147,13 +161,20 @@ class Jobs:
                         cursor.close()
                         db.close()
                         continue
-                else:
+                # TODO: Change this class to 'GenJob' or some such
+                elif type(response[1]) == Job:
                     query, params = await self.finish_gen_job(response[0],
                                                               response[1])
                     cursor.execute(query, params)
+                    for i in range(1,9):
+                        cursor.execute("INSERT INTO images(gid, idx) VALUES (?,?)",
+                                       (params[0], i))
                 db.commit()
                 cursor.close()
                 db.close()
+            if (time.time() - last_rate_prompt) >= 60:
+                await self.rate_prompt()
+                last_rate_prompt = time.time()
             if None not in self._gpu_table:
                 for job_time in enumerate(self._gpu_table):
                     # Clear out stuck job registers/timeout                   
@@ -193,6 +214,39 @@ class Jobs:
                 )
                 gen_job.start()
 
+    async def rate_prompt(self):
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        # Try finding images with no rating
+        cursor.execute('''SELECT generations.id, images.id, prompt, images.idx, COUNT(rating) as num_ratings FROM 
+                       generations LEFT OUTER JOIN images ON images.gid=generations.id
+                       LEFT OUTER JOIN ratings ON images.id=ratings.iid 
+                       GROUP BY images.id 
+                       HAVING num_ratings == 0;''')
+        to_rate = cursor.fetchall()
+        for cid in self._channels:
+            try:
+                gen = secrets.choice(to_rate)
+            except IndexError:
+                return
+            view = RatingButtons(gen[0], index=gen[3])
+            embed = nextcord.Embed(title="Feedback", description="")
+            cursor.execute("SELECT COUNT(*) from ratings where iid=?", (gen[1],))
+            ratings = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) from flags where iid=?", (gen[1],))
+            flags = cursor.fetchone()[0]
+            embed.add_field(name="Ratings", value=ratings)
+            embed.add_field(name="Flags", value=flags)
+            upload = nextcord.File(str(gen[0]) + "_" + gen[2].replace(" ", "_").replace("/","_") +
+                               "_" + str(gen[3]) + ".png")
+            channel = bot.get_channel(cid)
+            coroutine = channel.send(
+                gen[2],
+                file=upload,
+                embed=embed,
+                view=view)
+            asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
+                
     def submit(self, interaction, job):
         try:
             uid = interaction.user.id
@@ -237,7 +291,7 @@ class Jobs:
         )
         response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
         self._gpu_table[int(job.device)] = None
-        return ("INSERT INTO upscales VALUES (?,?,?)", (job.gen[0], job.index, 0))
+        return ("INSERT INTO upscales VALUES (?,?)", (job.iid, 0))
         
 TESTING_GUILD_ID = 958788735254822972  # Replace with your guild ID
 
@@ -248,9 +302,9 @@ async def on_ready():
     print(f'We have logged in as {bot.user}')
 
 class UpscaleJob:
-    def __init__(self, input, index, checkpoint, eta, output, seed, steps):
+    def __init__(self, input, iid, checkpoint, eta, output, seed, steps):
         self.input = input
-        self.index = index
+        self.iid = iid
         self.checkpoint = checkpoint
         self.eta = eta
         self.output = output
@@ -270,8 +324,16 @@ class GridButtons(nextcord.ui.View):
             return
         prompt = gen[-1]
         img_path = str(gen[0]) + "_" + prompt.replace(" ", "_").replace("/","_") + "_" + str(index) + ".png"
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("SELECT id FROM images WHERE gid=? AND idx=?",
+                       (gen[0], index))
+        image_id = cursor.fetchone()[0]
+        assert image_id
+        cursor.close()
+        db.close()
         job = UpscaleJob(input=img_path,
-                         index=index,
+                         iid=image_id,
                          checkpoint="yfcc_upscaler_2.ckpt",
                          eta=1.,
                          output=img_path.replace(".png", "_4x_upscale.png"),
@@ -318,7 +380,7 @@ class GridButtons(nextcord.ui.View):
         await self.upscale(button, interaction, 8)
 
 
-class GenerationButtons(nextcord.ui.View):
+class AbstractButtons(nextcord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.value = None
@@ -428,7 +490,12 @@ class GenerationButtons(nextcord.ui.View):
                         style=nextcord.ButtonStyle.gray, row=4)
     async def spacer3(self, button, interaction):
         pass
-    
+
+
+class GenerationButtons(AbstractButtons):
+    def __init__(self):
+        super().__init__()
+        
     @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
     async def flag(self, button, interaction):
         if not users.is_user(interaction.user.id):
@@ -437,6 +504,47 @@ class GenerationButtons(nextcord.ui.View):
         message = interaction.message
         generation = generations.get_gen_from_mid(message.id)
         flags.record_flag(interaction.user.id, generation[0])
+        # Update number of flags
+        num_flags = int(message.embeds[0].fields[1].value)
+        num_flags += 1
+        embed = message.embeds[0].set_field_at(1, name="Flags",
+                                               value=num_flags)
+        await message.edit(embed=embed)
+
+class RatingButtons(AbstractButtons):
+    def __init__(self, gid, index: int = 1):
+        super().__init__()
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("select * from generations where id=?", (gid,))
+        self.generation = cursor.fetchone()
+        self.index = index
+        cursor.close()
+        db.close()
+
+    async def rate(self, interaction, rating):
+        # TODO: Let users update their rating
+        if not users.is_user(interaction.user.id):
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            return
+        message = interaction.message
+        generation = self.generation
+        ratings.record_rating(interaction.user.id, generation[0], rating, index = self.index)
+        # Update number of ratings
+        num_ratings = int(message.embeds[0].fields[0].value)
+        num_ratings += 1
+        embed = message.embeds[0].set_field_at(0, name="Ratings",
+                                               value=num_ratings)
+        await message.edit(view=self, embed=embed)
+
+    @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
+    async def flag(self, button, interaction):
+        if not users.is_user(interaction.user.id):
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            return
+        message = interaction.message
+        generation = self.generation
+        flags.record_flag(interaction.user.id, generation[0], index = self.index)
         # Update number of flags
         num_flags = int(message.embeds[0].fields[1].value)
         num_flags += 1
@@ -502,6 +610,49 @@ async def add(interaction: nextcord.Interaction):
         await interaction.message.add_reaction('2️⃣')
 
 @bot.command()
+async def rate(interaction: nextcord.Interaction):
+    if type(interaction.channel) != nextcord.channel.DMChannel:
+        return
+
+    db = sqlite3.connect('db.sqlite')
+    cursor = db.cursor()
+    # Try finding images with no rating
+    cursor.execute('''SELECT generations.id, images.id, prompt, images.idx, COUNT(rating) as num_ratings FROM 
+                      generations LEFT OUTER JOIN images ON images.gid=generations.id
+                      LEFT OUTER JOIN ratings ON images.id=ratings.iid 
+                      GROUP BY images.id 
+                      HAVING num_ratings == 0;''')
+    to_rate = cursor.fetchall()[:5]
+    # If all images rated find images with too few ratings
+    #if not to_rate:
+    #    cursor.execute('''SELECT id, prompt, COUNT(rating) as num_ratings FROM 
+    #                      images JOIN ratings ON images.id=ratings.iid 
+    #                      WHERE images.id NOT IN 
+    #                      (SELECT iid FROM ratings WHERE uid=?) 
+    #                      GROUP BY images.id HAVING num_ratings < 3;''',
+    #                   (interaction.message.author.id,))
+    #    to_rate = cursor.fetchall()[:5]
+    for gen in to_rate:
+        view = RatingButtons(gen[0], index=gen[3])
+        embed = nextcord.Embed(title="Feedback", description="")
+        cursor.execute("SELECT COUNT(*) from ratings where iid=?", (gen[1],))
+        ratings = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) from flags where iid=?", (gen[1],))
+        flags = cursor.fetchone()[0]
+        embed.add_field(name="Ratings", value=ratings)
+        embed.add_field(name="Flags", value=flags)
+        upload = nextcord.File(str(gen[0]) + "_" + gen[2].replace(" ", "_").replace("/","_") +
+                               "_" + str(gen[3]) + ".png")
+        
+        await interaction.channel.send(
+            gen[2],
+            file=upload,
+            embed=embed,
+            view=view)
+    cursor.close()
+    db.close()
+            
+@bot.command()
 async def export(interaction: nextcord.Interaction):
     if type(interaction.channel) != nextcord.channel.DMChannel:
         return
@@ -513,11 +664,18 @@ async def export(interaction: nextcord.Interaction):
                                         (interaction.message.author.id,)).fetchone()
         export['generations'] = cursor.execute('SELECT * FROM generations where uid=?',
                                                (interaction.message.author.id,)).fetchall()
+        export['images'] = cursor.execute('''SELECT images.* FROM images INNER JOIN generations ON
+                                          images.gid=generations.id where generations.uid=?''',
+                                          (interaction.message.author.id,)).fetchall()
         export['ratings'] = cursor.execute('SELECT * FROM ratings where uid=?',
                                            (interaction.message.author.id,)).fetchall()
         export['flags'] = cursor.execute('SELECT * FROM flags where uid=?',
                                          (interaction.message.author.id,)).fetchall()
-        export['upscales'] = cursor.execute('SELECT * FROM upscales where uid=?',
+        export['upscales'] = cursor.execute('''SELECT upscales.* FROM upscales 
+                                            INNER JOIN images ON 
+                                            images.id=upscales.iid INNER JOIN
+                                            generations ON generations.id=images.gid 
+                                            where generations.uid=?''',
                                             (interaction.message.author.id,)).fetchall()
         db.close()
         upload = nextcord.File(io.StringIO(json.dumps(export)),
@@ -556,7 +714,7 @@ if __name__ == '__main__' :
     generations = Generations('db.sqlite')
     ratings = Ratings('db.sqlite')
     flags = Flags('db.sqlite')
-    jobs = Jobs('db.sqlite')
+    jobs = Jobs(channel_whitelist, 'db.sqlite')
 
     jobs_thread = threading.Thread(
         target=asyncio.run,
