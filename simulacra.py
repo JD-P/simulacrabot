@@ -608,7 +608,7 @@ class ModerationButtons(nextcord.ui.View):
         """Send a user a notification that their submission was unacceptable."""
         user = await bot.fetch_user(self.generation[1])
         view = WarningSelect(self.generation, user)
-        await interaction.user.send(".",
+        await interaction.user.send("",
                               view=view)
 
                 
