@@ -600,6 +600,7 @@ class ModerationButtons(nextcord.ui.View):
         cursor.execute("""DELETE FROM flags WHERE flags.iid IN
                           (SELECT id FROM images WHERE gid=?)""",
                        (self.generation[0],))
+        db.commit()
         cursor.close()
         db.close()
         
