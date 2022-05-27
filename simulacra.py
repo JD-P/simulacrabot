@@ -16,6 +16,10 @@ from simulacra_glide_sample import main as gen
 from yfcc_upscale import main as upscale
 from collections import namedtuple
 
+intents = nextcord.Intents.default()
+intents.members = True
+bot = commands.Bot(command_prefix='.', intents=intents)
+
 logging.basicConfig(filename='simulacra.log', encoding='utf-8', level=logging.WARNING)
 
 if not os.path.exists("db.sqlite"):
@@ -114,6 +118,12 @@ class Flags:
     def __init__(self, dbpath):
         self.dbpath = dbpath
 
+    def get_flags(self):
+        db = sqlite3.connect(self.dbpath)
+        cursor = db.cursor()
+        cursor.execute("SELECT * FROM flags;")
+        return cursor.fetchall()
+        
     def record_flag(self, uid: int, gid: int, index: int = 1):
         db = sqlite3.connect(self.dbpath)
         cursor = db.cursor()
@@ -292,10 +302,7 @@ class Jobs:
         response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
         self._gpu_table[int(job.device)] = None
         return ("INSERT INTO upscales VALUES (?,?)", (job.iid, 0))
-        
-TESTING_GUILD_ID = 958788735254822972  # Replace with your guild ID
 
-bot = commands.Bot(command_prefix='.')
 
 @bot.event
 async def on_ready():
@@ -552,7 +559,100 @@ class RatingButtons(AbstractButtons):
                                                value=num_flags)
         await message.edit(embed=embed)
 
+class WarningSelect(nextcord.ui.View):
+    def __init__(self, generation, recipient):
+        super().__init__(timeout=None)
+        self.value = None
+        self.generation = generation
+        self.recipient = recipient
 
+    @nextcord.ui.select(placeholder="Why is this gen being removed?",
+                        custom_id="warnselect",
+                        options=[
+                            nextcord.SelectOption(label="NSFW",
+                                                  value="was NSFW"),
+                            nextcord.SelectOption(label="Hateful",
+                                                  value="was hateful"),
+                            nextcord.SelectOption(label="Personal Information",
+                                                  value="included personal information"),
+                            nextcord.SelectOption(label="Copyright/Trademarks",
+                                                  value="violated copyright"),
+                        ])
+    async def warning(self, select, interaction):
+        await self.recipient.send(f"Your generation '{self.generation[-1]}' was "
+                                  f"removed from Simulacra Aesthetic captions because it {select.values[0]}.")
+        
+class ModerationButtons(nextcord.ui.View):
+    def __init__(self, gid):
+        super().__init__(timeout=None)
+        self.value = None
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("SELECT * FROM generations WHERE id=?", (gid,))
+        self.generation = cursor.fetchone()
+        cursor.close()
+        db.close()
+
+    @nextcord.ui.button(label="OK", custom_id="pass")
+    async def ok(self, button, interaction):
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("""DELETE flags FROM flags INNER JOIN images 
+                          ON flags.iid=images.id 
+                          WHERE images.gid=?""",
+                       (self.generation[0],))
+        cursor.close()
+        db.close()
+        
+    @nextcord.ui.button(label="Warn", custom_id="warn")
+    async def warn(self, button, interaction):
+        """Send a user a notification that their submission was unacceptable."""
+        user = await bot.fetch_user(self.generation[1])
+        view = WarningSelect(self.generation, user)
+        await interaction.user.send(".",
+                              view=view)
+
+                
+    @nextcord.ui.button(label="Purge", custom_id="purge")
+    async def purge(self, button, interaction):
+        """Purge a submission from the database."""
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("SELECT idx FROM images WHERE gid=?", (self.generation[0],))
+        batch_indexes = [x[0] for x in cursor.fetchall()]
+        for index in batch_indexes:
+            prompt = self.generation[-1]
+            img_path = str(self.generation[0]) + "_" + prompt.replace(" ", "_").replace("/","_") + "_" + str(index) + ".png"
+            os.remove(img_path)
+            try:
+                os.remove(img_path.replace(".png", "_4x_upscale.png"))
+            except FileNotFoundError:
+                continue
+        prompt = self.generation[-1]
+        img_path = str(self.generation[0]) + "_" + prompt.replace(" ", "_").replace("/","_") + "_grid" + ".png"
+        os.remove(img_path)
+        cursor.execute("""DELETE FROM upscales WHERE upscales.iid IN
+                          (SELECT id FROM images WHERE gid=?)""",
+                       (self.generation[0],))
+        cursor.execute("""DELETE FROM ratings WHERE ratings.iid IN
+                          (SELECT id FROM images WHERE gid=?)""",
+                       (self.generation[0],))
+        cursor.execute("""DELETE FROM flags WHERE flags.iid IN
+                          (SELECT id FROM images WHERE gid=?)""",
+                       (self.generation[0],))
+        cursor.execute("DELETE FROM images WHERE gid=?", (self.generation[0],))
+        cursor.execute("DELETE FROM generations WHERE id=?",
+                       (self.generation[0],))
+        db.commit()
+        cursor.close()
+        db.close()
+        await interaction.user.send("Purged!")
+
+    @nextcord.ui.button(label="Ban", custom_id="ban")
+    async def ban(self, button, interaction):
+        """Ban a user for submitting a prompt."""
+        pass
+        
 class Job:
     def __init__(self, prompt, cloob_checkpoint, scale, cutn, device, ddim_eta,
                  method, H, W, n_iter, n_samples, seed, ddim_steps, plms):
@@ -697,6 +797,30 @@ async def adduser(interaction: nextcord.Interaction):
         else:
             await interaction.message.author.send(f"Added '{name}' as normal user.")
 
+@bot.command()
+async def mod(interaction: nextcord.Interaction):
+    user = users.is_user(interaction.message.author.id)
+    if type(interaction.channel) != nextcord.channel.DMChannel:
+        return
+    if (not user) or (not user[1]):
+        interaction.message.author.send("This command is restricted to admins only.")
+    else:
+        to_review = flags.get_flags()[0]
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("SELECT * FROM images WHERE id=?", (to_review[1],))
+        image = cursor.fetchone()
+        cursor.execute("SELECT * FROM generations WHERE id=?", (image[1],))
+        gen = cursor.fetchone()
+        prompt = gen[-1]
+        img_path = str(gen[0]) + "_" + prompt.replace(" ", "_").replace("/","_") + "_grid" + ".png"
+        upload = nextcord.File(img_path)
+        view = ModerationButtons(image[1])
+        await interaction.message.author.send(
+            prompt,
+            view=view,
+            file=upload)
+            
 if __name__ == '__main__' :
             
     with open('channel_whitelist.txt') as infile:
@@ -721,6 +845,6 @@ if __name__ == '__main__' :
         args=(jobs.main(),)
     )
     jobs_thread.start()
-
+    
     bot.run(token)
 
