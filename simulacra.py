@@ -593,13 +593,12 @@ class ModerationButtons(nextcord.ui.View):
         cursor.close()
         db.close()
 
-    @nextcord.ui.button(label="OK", custom_id="pass")
+    @nextcord.ui.button(label="OK", custom_id="ok")
     async def ok(self, button, interaction):
         db = sqlite3.connect('db.sqlite')
         cursor = db.cursor()
-        cursor.execute("""DELETE flags FROM flags INNER JOIN images 
-                          ON flags.iid=images.id 
-                          WHERE images.gid=?""",
+        cursor.execute("""DELETE FROM flags WHERE flags.iid IN
+                          (SELECT id FROM images WHERE gid=?)""",
                        (self.generation[0],))
         cursor.close()
         db.close()
