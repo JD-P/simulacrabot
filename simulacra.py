@@ -27,8 +27,12 @@ if not os.path.exists("db.sqlite"):
     cursor = db.cursor()
     cursor.execute('''CREATE TABLE users
                       (id INTEGER PRIMARY KEY, admin INTEGER, banned INTEGER,
-                       verified INTEGER, name TEXT)''')
-    cursor.execute("INSERT INTO users VALUES (621583764174143488, 1, 0, 1, 'John David Pressman')")
+                       verified INTEGER)''')
+    cursor.execute('''CREATE TABLE survey
+                      (uid INTEGER, qid INTEGER, rating INTEGER,
+                      FOREIGN KEY(uid) REFERENCES users(id)
+                      PRIMARY KEY(uid, qid))''')
+    # cursor.execute("INSERT INTO users VALUES (621583764174143488, 1, 0, 1)")
     cursor.execute('''CREATE TABLE generations
                            (id INTEGER PRIMARY KEY, uid INTEGER, mid INTEGER, 
                            method INTEGER, prompt TEXT, 
@@ -652,7 +656,149 @@ class ModerationButtons(nextcord.ui.View):
     async def ban(self, button, interaction):
         """Ban a user for submitting a prompt."""
         pass
+
+class RatingSurvey(AbstractButtons):
+    def __init__(self):
+        super().__init__()
+        self.survey_images = [
+            ("The West Coastline. #west #ocean", "survey/6042_The_West_Coastline._west_ocean_6.png"),
+            ("hyperrealistic bokeh portrait cinematic matte painting concept art "
+             "african american New Orleans",
+             "survey/7413_hyperrealistic_bokeh_portrait_cinematic_matte_painting"
+             "_concept_art_african_american_New_Orleans_1.png"),
+            ("A painting of a swamp at low tide. There is a small portion of a "
+             "castle and a patch of blue sky in the far off distance.",
+             "survey/4904_A_painting_of_a_swamp_at_low_tide._There_is_a_small_portion_of_"
+             "a_castle_and_a_patch_of_blue_sky_in_the_far_off_distance._3.png"),
+            ("fantasy illustration of a river of blood, flowing through a field of bones.",
+             "survey/549_fantasy_illustration_of_a_river_of_blood_flowing_through_a_field_of_bones._6.png"),
+            ("full color inkscape digital art of a hackers lair bedroom computer setup battlestation",
+             "survey/1279_full_color_inkscape_digital_art_of_a_hackers_lair_bedroom_computer_setup_battlestation_5.png"),
+            ("traditional dark Hijab Muslim Woman Islam Girl Portrait Fashion "
+             "People Model Eyes oil on canvas",
+             "survey/7435_traditional_dark_Hijab_Muslim_Woman_Islam_Girl_Portrait"
+             "_Fashion_People_Model_Eyes_oil_on_canvas_3.png"),
+            ("accurate beautiful cute anime symmetric danbooru chibi depiction of a magical girl",
+             "survey/6641_accurate_beautiful_cute_anime_symmetric_danbooru_chibi_depiction_of_a_magical_girl_2.png"),
+            ("A portrait painting of Adolf Hitler",
+             "survey/Der_Führer_Gemälde_Portrait_painting_of_Adolf_Hitler_by_Heinrich_Knirr"
+             "_1937_No_known_copyright_restrictions_(artist_died_in_1944)_Imperial_War_Museum_London.png"),
+            ("detailed accurate krita digital masterpiece commissioned street "
+             "scene of a cyberpunk Tokyo market stall, artstation matte painting",
+             "survey/6625_detailed_accurate_krita_digital_masterpiece_commissioned_street_"
+             "scene_of_a_cyberpunk_Tokyo_market_stall_artstation_matte_painting_1.png"),
+            ("professional HDR flambient golden hour real estate photography of"
+             "futuristic hyperrealism scifi fantasy industrial corporate agents",
+             "survey/3690_professional_HDR_flambient_golden_hour_real_estate_photography_of"
+             "_futuristic_hyperrealism_scifi_fantasy_industrial_corporate_agents_5.png"),
+            ("The colors in this illustration are simply gorgeous! They perfectly "
+             "compliment the scene and add an extra layer of beauty to the already stunning image!",
+             "survey/6424_The_colors_in_this_illustration_are_simply_gorgeous_They_perfectly"
+             "_compliment_the_scene_and_add_an_extra_layer_of_beauty_to_the_already_stunning_image_6.png"),
+            ("hyperrealism chiaroscuro cinematic oil on canvas matte painting of "
+             "professional golden hour flambient real estate photo scifi traditional "
+             "japanese onsen shinto temple zen garden",
+             "survey/3647_hyperrealism_chiaroscuro_cinematic_oil_on_canvas_matte_painting"
+             "_of_professional_golden_hour_flambient_real_estate_photo_scifi_"
+             "traditional_japanese_onsen_shinto_temple_zen_garden_4.png"),
+            ("I found this abstract art and don't know what it means",
+             "survey/3226_I_found_this_abstract_art_and_dont_know_what_it_means_4.png"),
+            ("A painting of a mystical creature in a magical forest",
+             "survey/585_A_painting_of_a_mystical_creature_in_a_magical_forest_2.png"),
+            ("digital painting of a mansion in the middle of a forest, 4k, Ross "
+             "Tran, Gurney, Frank Frazetta, Skeeva, Gal Barkan, matayosi, high "
+             "fantasy concept key art",
+             "survey/4220_digital_painting_of_a_mansion_in_the_middle_of_a_forest_4k_Ross"
+             "_Tran_Gurney_Frank_Frazetta_Skeeva_Gal_Barkan_matayosi_high_fantasy_"
+             "concept_key_art_6.png"),
+            ("professional HDR flambient wide angle bokeh photography of a cute "
+             "pink glittery magical fairy enchanted forest fantasy butterflies and poodles",
+             "survey/6609_professional_HDR_flambient_wide_angle_bokeh_photography_of_a_"
+             "cute_pink_glittery_magical_fairy_enchanted_forest_fantasy_butterflies_and_poodles_1.png"),
+            ("chiaroscuro professional oil on canvas matte painting concept art "
+             "of a masculine warrior from myths and legends",
+             "survey/6548_chiaroscuro_professional_oil_on_canvas_matte_painting_"
+             "concept_art_of_a_masculine_warrior_from_myths_and_legends_2.png"),
+            ("A nightmarish creature made of shadows and teeth.",
+             "survey/1039_A_nightmarish_creature_made_of_shadows_and_teeth._1.png"),
+            ("A crowded subway car, the fluorescent lights flickering and casting"
+             " an eerie glow on the people inside.",
+             "survey/5087_A_crowded_subway_car_the_fluorescent_lights_flickering_and_"
+             "casting_an_eerie_glow_on_the_people_inside._2.png"),
+            ("krita digital masterpiece of the tower of babel as a series of neural net layers",
+             "survey/6532_krita_digital_masterpiece_of_the_tower_of_babel_as_a_series_of_neural_net_layers_3.png")
+            
+        ]
+
+    def get_next_image_for_user(self, user):
+        # We need to always get the correct next image for the user even if they
+        # partially complete the survey and then abandon it between bot reboots.
+        # This way it's not possible for a user to get stuck in the signup process.
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM survey WHERE uid=?",
+                       (user.id,))
+        index = cursor.fetchone()[0]
+        cursor.close()
+        db.close()
+        return index
         
+    async def rate(self, interaction, rating):
+        index = self.get_next_image_for_user(interaction.user)
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("INSERT INTO survey VALUES (?,?,?)",
+                       (interaction.user.id, index, rating))
+        db.commit()
+        cursor.close()
+        db.close()
+        index = self.get_next_image_for_user(interaction.user)
+        if index < 20:
+            prompt, path = self.survey_images[index]
+            upload = nextcord.File(path)
+            await interaction.user.send(f"{index + 1}. " + prompt,
+                                        file=upload,
+                                        view=self)
+        else:
+            db = sqlite3.connect('db.sqlite')
+            cursor = db.cursor()
+            cursor.execute("INSERT INTO users VALUES (?,?,?,?)",
+                           (interaction.user.id, 0, 0, 0))
+            db.commit()
+            cursor.close()
+            db.close()
+            await interaction.user.send("The survey is finished! You can now use the bot.")
+            await interaction.user.send("You can do so by typing `.add <prompt>`"
+                                        " into the channel you first interacted with the bot in.")
+
+class AgreementSelect(nextcord.ui.View):
+    def __init__(self):
+        super().__init__()
+        self.value = None
+
+        
+    @nextcord.ui.select(placeholder="Do you agree to these terms of service?",
+                        custom_id="tosagreement",
+                        options=[
+                            nextcord.SelectOption(label="Yes, and understand all work with SimulacraBot is public domain",
+                                                  value=True),
+                            nextcord.SelectOption(label="No",
+                                                  value=False),
+                        ])
+    async def agreement(self, select, interaction):
+        if select.values[0]:
+            view = RatingSurvey()
+            index = view.get_next_image_for_user(interaction.user)
+            prompt, path = view.survey_images[index]
+            upload = nextcord.File(path)
+            await interaction.user.send("Before you can use the bot you need to"
+                                        " answer a quick 20 question rating task"
+                                        " to characterize your aesthetic preferences"
+                                        " and rating habits for dataset users.") 
+            await interaction.user.send(f"{index + 1}. " + prompt,
+                                  file=upload,
+                                  view=view)
+    
 class Job:
     def __init__(self, prompt, cloob_checkpoint, scale, cutn, device, ddim_eta,
                  method, H, W, n_iter, n_samples, seed, ddim_steps, plms):
@@ -784,6 +930,17 @@ async def export(interaction: nextcord.Interaction):
                                    int(time.time())))
         await interaction.send("Your SimulacraBot text data:\n\n(Due to their size images must be manually requested by sending mail to gdpr@stability.ai or pinging bot admins such as Drexler#4006)" , file=upload)
 
+@bot.command()
+async def signup(interaction: nextcord.Interaction):
+    if type(interaction.channel) != nextcord.channel.DMChannel:
+        return
+    # We shouldn't let people sign up twice
+    elif users.is_user(interaction.message.author.id):
+        return
+
+    view = AgreementSelect()
+    await interaction.message.author.send("TOS PLACEHOLDER", view=view)
+    
 @bot.command()
 async def adduser(interaction: nextcord.Interaction):
     user = users.is_user(interaction.message.author.id)
