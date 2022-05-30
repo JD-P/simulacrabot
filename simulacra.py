@@ -522,6 +522,7 @@ class GenerationButtons(AbstractButtons):
                                                value=num_flags)
         await message.edit(embed=embed)
 
+
 class RatingButtons(AbstractButtons):
     def __init__(self, gid, index: int = 1):
         super().__init__()
@@ -547,6 +548,89 @@ class RatingButtons(AbstractButtons):
         embed = message.embeds[0].set_field_at(0, name="Ratings",
                                                value=num_ratings)
         await message.edit(view=self, embed=embed)
+
+    @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
+    async def flag(self, button, interaction):
+        if not users.is_user(interaction.user.id):
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            return
+        message = interaction.message
+        generation = self.generation
+        flags.record_flag(interaction.user.id, generation[0], index = self.index)
+        # Update number of flags
+        num_flags = int(message.embeds[0].fields[1].value)
+        num_flags += 1
+        embed = message.embeds[0].set_field_at(1, name="Flags",
+                                               value=num_flags)
+        await message.edit(embed=embed)
+        
+        
+class StreamRatingButtons(AbstractButtons):
+    def __init__(self):
+        super().__init__()
+        gen, ratings, flags = self.get_next_image_to_rate()
+        gid = gen[0]
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("select * from generations where id=?", (gid,))
+        self.generation = cursor.fetchone()
+        self.index = gen[3]
+        cursor.close()
+        db.close()
+        
+
+    def get_next_image_to_rate(self):
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        # Try finding images with no rating
+        cursor.execute('''SELECT generations.id, images.id, prompt, images.idx, COUNT(rating) as num_ratings FROM 
+                          generations LEFT OUTER JOIN images ON images.gid=generations.id
+                          LEFT OUTER JOIN ratings ON images.id=ratings.iid 
+                          GROUP BY images.id 
+                          HAVING num_ratings == 0;''')
+        gen = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) from ratings where iid=?", (gen[1],))
+        ratings = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) from flags where iid=?", (gen[1],))
+        flags = cursor.fetchone()[0]
+        cursor.close()
+        db.close()
+        return gen, ratings, flags
+        
+    async def rate(self, interaction, rating):
+        # TODO: Let users update their rating
+        if not users.is_user(interaction.user.id):
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            return
+        message = interaction.message
+        generation = self.generation
+        ratings.record_rating(interaction.user.id, generation[0], rating, index = self.index)
+        # Update number of ratings
+        num_ratings = int(message.embeds[0].fields[0].value)
+        num_ratings += 1
+        embed = message.embeds[0].set_field_at(0, name="Ratings",
+                                               value=num_ratings)
+        await message.edit(view=self, embed=embed)
+        # Send next message in the chain
+        gen, ratings_count, flags = self.get_next_image_to_rate()
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("select * from generations where id=?", (gen[0],))
+        self.generation = cursor.fetchone()
+        self.index = gen[3]
+        cursor.close()
+        db.close()
+        embed = nextcord.Embed(title="Feedback", description="")
+        embed.add_field(name="Ratings", value=ratings_count)
+        embed.add_field(name="Flags", value=flags)
+        upload = nextcord.File(str(gen[0]) + "_" + gen[2].replace(" ", "_").replace("/","_") +
+                           "_" + str(gen[3]) + ".png")
+        
+        await interaction.user.send(
+            gen[2],
+            file=upload,
+            embed=embed,
+            view=self)
 
     @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
     async def flag(self, button, interaction):
@@ -860,15 +944,7 @@ async def rate(interaction: nextcord.Interaction):
     if type(interaction.channel) != nextcord.channel.DMChannel:
         return
 
-    db = sqlite3.connect('db.sqlite')
-    cursor = db.cursor()
-    # Try finding images with no rating
-    cursor.execute('''SELECT generations.id, images.id, prompt, images.idx, COUNT(rating) as num_ratings FROM 
-                      generations LEFT OUTER JOIN images ON images.gid=generations.id
-                      LEFT OUTER JOIN ratings ON images.id=ratings.iid 
-                      GROUP BY images.id 
-                      HAVING num_ratings == 0;''')
-    to_rate = cursor.fetchall()[:5]
+
     # If all images rated find images with too few ratings
     #if not to_rate:
     #    cursor.execute('''SELECT id, prompt, COUNT(rating) as num_ratings FROM 
@@ -878,25 +954,19 @@ async def rate(interaction: nextcord.Interaction):
     #                      GROUP BY images.id HAVING num_ratings < 3;''',
     #                   (interaction.message.author.id,))
     #    to_rate = cursor.fetchall()[:5]
-    for gen in to_rate:
-        view = RatingButtons(gen[0], index=gen[3])
-        embed = nextcord.Embed(title="Feedback", description="")
-        cursor.execute("SELECT COUNT(*) from ratings where iid=?", (gen[1],))
-        ratings = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) from flags where iid=?", (gen[1],))
-        flags = cursor.fetchone()[0]
-        embed.add_field(name="Ratings", value=ratings)
-        embed.add_field(name="Flags", value=flags)
-        upload = nextcord.File(str(gen[0]) + "_" + gen[2].replace(" ", "_").replace("/","_") +
-                               "_" + str(gen[3]) + ".png")
+    view = StreamRatingButtons()
+    gen, ratings, flags = view.get_next_image_to_rate()
+    embed = nextcord.Embed(title="Feedback", description="")
+    embed.add_field(name="Ratings", value=ratings)
+    embed.add_field(name="Flags", value=flags)
+    upload = nextcord.File(str(gen[0]) + "_" + gen[2].replace(" ", "_").replace("/","_") +
+                           "_" + str(gen[3]) + ".png")
         
-        await interaction.channel.send(
-            gen[2],
-            file=upload,
-            embed=embed,
-            view=view)
-    cursor.close()
-    db.close()
+    await interaction.channel.send(
+        gen[2],
+        file=upload,
+        embed=embed,
+        view=view)
             
 @bot.command()
 async def export(interaction: nextcord.Interaction):
