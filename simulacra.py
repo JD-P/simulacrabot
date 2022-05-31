@@ -399,7 +399,7 @@ class AbstractButtons(nextcord.ui.View):
     async def rate(self, interaction, rating):
         # TODO: Let users update their rating
         if not users.is_user(interaction.user.id):
-            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
             return
         message = interaction.message
         generation = generations.get_gen_from_mid(message.id)
@@ -510,7 +510,7 @@ class GenerationButtons(AbstractButtons):
     @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
     async def flag(self, button, interaction):
         if not users.is_user(interaction.user.id):
-            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
             return
         message = interaction.message
         generation = generations.get_gen_from_mid(message.id)
@@ -537,7 +537,7 @@ class RatingButtons(AbstractButtons):
     async def rate(self, interaction, rating):
         # TODO: Let users update their rating
         if not users.is_user(interaction.user.id):
-            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
             return
         message = interaction.message
         generation = self.generation
@@ -552,7 +552,7 @@ class RatingButtons(AbstractButtons):
     @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
     async def flag(self, button, interaction):
         if not users.is_user(interaction.user.id):
-            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
             return
         message = interaction.message
         generation = self.generation
@@ -600,7 +600,7 @@ class StreamRatingButtons(AbstractButtons):
     async def rate(self, interaction, rating):
         # TODO: Let users update their rating
         if not users.is_user(interaction.user.id):
-            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
             return
         message = interaction.message
         generation = self.generation
@@ -635,7 +635,7 @@ class StreamRatingButtons(AbstractButtons):
     @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
     async def flag(self, button, interaction):
         if not users.is_user(interaction.user.id):
-            await interaction.user.send("You must agree to the TOS before using SimulacraBot.")
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
             return
         message = interaction.message
         generation = self.generation
@@ -878,7 +878,23 @@ class AgreementSelect(nextcord.ui.View):
             await interaction.user.send("Before you can use the bot you need to"
                                         " answer a quick 20 question rating task"
                                         " to characterize your aesthetic preferences"
-                                        " and rating habits for dataset users.") 
+                                        " and rating habits for dataset users.")
+            await interaction.user.send("You may rate the images however you like"
+                                        ", we try to keep it as subjective as possible."
+                                        " However there are two guidelines we would "
+                                        "appreciate you following:\n\n"
+                                        "1. Rate images lower if they contain "
+                                        "watermarks, logos, or other marks that "
+                                        "intrude on the canvas. If an image has "
+                                        "a disfiguring watermark across the center "
+                                        "it should be no higher than a 3, if it "
+                                        "includes a more subtle mark it should be "
+                                        "no higher than a 6.\n\n"
+                                        "2. As much as possible rate images on "
+                                        "the merits of the image, not the prompt "
+                                        "fit. Sometimes the AI produces good looking "
+                                        "but poorly fitting images, these should be "
+                                        "rated highly because they look good.\n\n")
             await interaction.user.send(f"{index + 1}. " + prompt,
                                   file=upload,
                                   view=view)
@@ -906,7 +922,7 @@ class Job:
 @bot.command()
 async def add(interaction: nextcord.Interaction):
     if not users.is_user(interaction.message.author.id):
-        await interaction.message.author.send("You must agree to the TOS before using SimulacraBot.")
+        await interaction.message.author.send("You must agree to the TOS before using SimulacraBot. Type .signup")
         return
     if interaction.channel.id not in channel_whitelist:
         return
@@ -1009,8 +1025,37 @@ async def signup(interaction: nextcord.Interaction):
         return
 
     view = AgreementSelect()
-    await interaction.message.author.send("TOS PLACEHOLDER", view=view)
-    
+    await interaction.message.author.send("https://stability.ai/simulacrabot/terms-of-use")
+    await interaction.message.author.send(
+        "Before using SimulacraBot you need to agree to the terms above."
+    )
+    await interaction.message.author.send("These are not boilerplate, please actually "
+                                         "read them. SimulacraBot is a study run by "
+                                         "Stability AI LTD. and has unusual terms you "
+                                         "agree to as part of participating in the study.")
+    await interaction.message.author.send("A summary (which should not be construed "
+                                          "as replacing the linked terms):")
+    await interaction.message.author.send("1. **You agree all work you do with "
+                                          "SimulacraBot, including submitted prompts, "
+                                          "is public domain.** "
+                                          "https://creativecommons.org/publicdomain/zero/1.0/")
+    await interaction.message.author.send("2. Your work will be released pseudonymously "
+                                          "as part of the Simulacra Aesthetic Captions"
+                                          " dataset. You agree that the pseudonym "
+                                          "method used (see terms) is not sufficiently"
+                                          " identifying to qualify for protection under"
+                                          " GDPR or similar laws.")
+    await interaction.message.author.send("3. You will not contribute prompts to "
+                                          "Simulacra Aesthetic Captions which are "
+                                          "NSFW, hateful, or contain personal "
+                                          "information or copyrighted material.")
+    await interaction.message.author.send("4. You are responsible for your bad "
+                                          "behavior, not us. Please flag bad "
+                                          "behavior you see.")
+    await interaction.message.author.send("Do you agree to the linked terms at "
+                                          "https://stability.ai/simulacrabot/terms-of-use ? "
+                                          "(they're short and readable) ",
+                                          view=view)
 @bot.command()
 async def adduser(interaction: nextcord.Interaction):
     user = users.is_user(interaction.message.author.id)
