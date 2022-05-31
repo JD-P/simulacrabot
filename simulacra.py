@@ -27,7 +27,7 @@ if not os.path.exists("db.sqlite"):
     cursor = db.cursor()
     cursor.execute('''CREATE TABLE users
                       (id INTEGER PRIMARY KEY, admin INTEGER, banned INTEGER,
-                       verified INTEGER)''')
+                       verified INTEGER, name TEXT)''')
     cursor.execute('''CREATE TABLE survey
                       (uid INTEGER, qid INTEGER, rating INTEGER,
                       FOREIGN KEY(uid) REFERENCES users(id)
@@ -846,8 +846,8 @@ class RatingSurvey(AbstractButtons):
         else:
             db = sqlite3.connect('db.sqlite')
             cursor = db.cursor()
-            cursor.execute("INSERT INTO users VALUES (?,?,?,?)",
-                           (interaction.user.id, 0, 0, 0))
+            cursor.execute("INSERT INTO users VALUES (?,?,?,?,?)",
+                           (interaction.user.id, 0, 0, 0, "deprecated"))
             db.commit()
             cursor.close()
             db.close()
@@ -889,7 +889,9 @@ class AgreementSelect(nextcord.ui.View):
                                         "a disfiguring watermark across the center "
                                         "it should be no higher than a 3, if it "
                                         "includes a more subtle mark it should be "
-                                        "no higher than a 6.\n\n"
+                                        "no higher than a 6. Paintings shown on a "
+                                        "wall, gallery, etc which encroaches on the "
+                                        "256x256 canvas should rate no higher than a 5.\n\n"
                                         "2. As much as possible rate images on "
                                         "the merits of the image, not the prompt "
                                         "fit. Sometimes the AI produces good looking "
