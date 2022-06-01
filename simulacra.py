@@ -186,7 +186,7 @@ class Jobs:
                 db.commit()
                 cursor.close()
                 db.close()
-            if (time.time() - last_rate_prompt) >= 60:
+            if (time.time() - last_rate_prompt) >= 120:
                 await self.rate_prompt()
                 last_rate_prompt = time.time()
             if None not in self._gpu_table:
