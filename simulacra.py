@@ -78,7 +78,7 @@ class Users:
         cursor = db.cursor()
         user = cursor.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         survey = cursor.execute("SELECT COUNT(*) FROM survey WHERE uid=?", (uid,)).fetchone()[0]
-        if user and (survey == 20):
+        if user and (survey >= 20):
             return user
         else:
             return False
