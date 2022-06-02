@@ -1094,7 +1094,33 @@ async def mod(interaction: nextcord.Interaction):
             prompt,
             view=view,
             file=upload)
-            
+
+@bot.command()
+async def stats(interaction: nextcord.Interaction):
+    if type(interaction.channel) != nextcord.channel.DMChannel:
+        return
+    else:
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM generations")
+        gen_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(DISTINCT prompt) FROM generations")
+        prompt_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM images")
+        image_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM ratings")
+        rating_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(DISTINCT iid) FROM ratings")
+        unique_rating_count = cursor.fetchone()[0]
+        unique_rate_percent = (unique_rating_count / image_count) * 100
+        
+        await interaction.message.author.send(
+            f"So far users have submitted {gen_count} jobs with {prompt_count} unique "
+            f"prompts resulting in {image_count} images, of which {unique_rating_count} "
+            f"({unique_rate_percent}%) are rated. Users have submitted {rating_count} "
+            "ratings total."
+        )
+        
 if __name__ == '__main__' :
             
     with open('channel_whitelist.txt') as infile:
