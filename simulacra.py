@@ -77,7 +77,8 @@ class Users:
         db = sqlite3.connect(self.dbpath)
         cursor = db.cursor()
         user = cursor.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
-        if user:
+        survey = cursor.execute("SELECT COUNT(*) FROM survey WHERE uid=?", (uid,)).fetchone()[0]
+        if user and (survey == 20):
             return user
         else:
             return False
@@ -1021,9 +1022,6 @@ async def export(interaction: nextcord.Interaction):
 @bot.command()
 async def signup(interaction: nextcord.Interaction):
     if type(interaction.channel) != nextcord.channel.DMChannel:
-        return
-    # We shouldn't let people sign up twice
-    elif users.is_user(interaction.message.author.id):
         return
 
     view = AgreementSelect()
