@@ -1115,7 +1115,7 @@ async def stats(interaction: nextcord.Interaction):
         await interaction.message.author.send(
             f"So far users have submitted {gen_count} jobs with {prompt_count} unique "
             f"prompts resulting in {image_count} images, of which {unique_rating_count} "
-            f"({unique_rate_percent}%) are rated. Users have submitted {rating_count} "
+            f"({round(unique_rate_percent,2)}%) are rated. Users have submitted {rating_count} "
             "ratings total."
         )
         
