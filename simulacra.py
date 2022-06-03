@@ -233,7 +233,8 @@ class Jobs:
         db = sqlite3.connect('db.sqlite')
         cursor = db.cursor()
         # Try finding images with no rating
-        cursor.execute('''SELECT generations.id, images.id, prompt, images.idx, COUNT(rating) as num_ratings FROM 
+        cursor.execute('''SELECT generations.id, images.id, prompt, images.idx, generations.uid,
+                       COUNT(rating) as num_ratings FROM 
                        generations LEFT OUTER JOIN images ON images.gid=generations.id
                        LEFT OUTER JOIN ratings ON images.id=ratings.iid 
                        GROUP BY images.id 
@@ -255,8 +256,14 @@ class Jobs:
             upload = nextcord.File(str(gen[0]) + "_" + gen[2].replace(" ", "_").replace("/","_") +
                                "_" + str(gen[3]) + ".png")
             channel = bot.get_channel(cid)
+            coroutine = bot.fetch_user(gen[4])
+            user = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
+            if user:
+                msg_body = gen[2] + f" - by {user.name}#{user.discriminator}"
+            else:
+                msg_body = gen[2]
             coroutine = channel.send(
-                gen[2],
+                msg_body,
                 file=upload,
                 embed=embed,
                 view=view)
