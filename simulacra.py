@@ -934,6 +934,10 @@ async def add(interaction: nextcord.Interaction):
             await interaction.send("'{}' is not an allowed word by the NSFW filter".format(word))
             return
     prompt = interaction.message.content.split(".add")[1].strip()
+    if len(prompt) > 255:
+        await interaction.send("The length of the prompt wouldn't fit on the "
+                               "filesystem. Please shorten it and try again.")
+        return
     seed = generations.get_next_seed()
     job = Job(prompt=prompt,
               cloob_checkpoint='cloob_laion_400m_vit_b_16_16_epochs',
