@@ -84,6 +84,7 @@ the python import system.
 ```
 ln -s latent-diffusion/models/ ./models
 ln -s latent-diffusion/configs/ ./configs
+ln -s latent-diffusion/ldm ./ldm
 ln -s taming-transformers/taming ./taming
 ```
 

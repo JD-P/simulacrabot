@@ -18,6 +18,7 @@ from collections import namedtuple
 
 intents = nextcord.Intents.default()
 intents.members = True
+intents.message_content = True
 bot = commands.Bot(command_prefix='.', intents=intents)
 
 logging.basicConfig(filename='simulacra.log', encoding='utf-8', level=logging.WARNING)
@@ -946,8 +947,8 @@ async def add(interaction: nextcord.Interaction):
               device='cuda:0',
               ddim_eta=0.,
               method='ddim',
-              H=256,
-              W=256,
+              H=512,
+              W=512,
               n_iter=1,
               n_samples=8,
               seed=seed,
