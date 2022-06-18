@@ -974,8 +974,8 @@ async def add(interaction: nextcord.Interaction):
               device='cuda:0',
               ddim_eta=0.,
               method='ddim',
-              H=256,
-              W=256,
+              H=512,
+              W=512,
               n_iter=1,
               n_samples=8,
               seed=seed,
@@ -1092,7 +1092,7 @@ async def signup(interaction: nextcord.Interaction):
 async def adduser(interaction: nextcord.Interaction):
     user = users.is_user(interaction.message.author.id)
     if (not user) or (not user[1]):
-        interaction.message.author.send("This command is restricted to admins only.")
+        await interaction.message.author.send("This command is restricted to admins only.")
     else:
         uid, name, verified = interaction.message.content.split(".adduser")[1].strip().split(",")
         users.add_user(int(uid), name, verified=int(verified))
@@ -1107,7 +1107,7 @@ async def mod(interaction: nextcord.Interaction):
     if type(interaction.channel) != nextcord.channel.DMChannel:
         return
     if (not user) or (not user[1]):
-        interaction.message.author.send("This command is restricted to admins only.")
+        await interaction.message.author.send("This command is restricted to admins only.")
     else:
         to_review = flags.get_flags()[0]
         db = sqlite3.connect('db.sqlite')
@@ -1150,7 +1150,25 @@ async def stats(interaction: nextcord.Interaction):
             f"({round(unique_rate_percent,2)}%) are rated. Users have submitted {rating_count} "
             "ratings total."
         )
-        
+
+@bot.command()
+async def shutdown(interaction: nextcord.Interaction):
+    user = users.is_user(interaction.message.author.id)
+    if type(interaction.channel) != nextcord.channel.DMChannel:
+        return
+    if (not user) or (not user[1]):
+        await interaction.message.author.send("This command is restricted to admins only.")
+    bot.remove_command("add")
+    @bot.command()
+    async def add(interaction: nextcord.Interaction):
+        await interaction.message.author.send("The bot is currently shutting down...")
+    bot.remove_command("signup")
+    @bot.command()
+    async def signup(interaction: nextcord.Interaction):
+        await interaction.message.author.send("The bot is currently shutting down...")
+    await interaction.message.author.send("Commands disabled. Wait five minutes "
+                                          "and then shut down the bot.")
+
 if __name__ == '__main__' :
             
     with open('channel_whitelist.txt') as infile:
