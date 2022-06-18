@@ -617,7 +617,7 @@ class StreamRatingButtons(AbstractButtons):
                           LEFT OUTER JOIN ratings ON images.id=ratings.iid 
                           GROUP BY images.id 
                           HAVING num_ratings == 0;''')
-        gen = cursor.fetchone()
+        gen = secrets.choice(cursor.fetchall())
         cursor.execute("SELECT COUNT(*) from ratings where iid=?", (gen[1],))
         ratings = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) from flags where iid=?", (gen[1],))
