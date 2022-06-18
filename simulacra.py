@@ -5,6 +5,9 @@ import io
 import json
 import torch
 from torch import multiprocessing as mp
+from PIL import Image
+from torchvision.io import read_image
+from torchvision import transforms
 import logging
 import sqlite3
 import asyncio
@@ -12,7 +15,7 @@ import threading
 import queue
 import nextcord
 from nextcord.ext import commands
-from simulacra_glide_sample import main as gen
+from simulacra_imagen_sample import main as gen
 from yfcc_upscale import main as upscale
 from collections import namedtuple
 
@@ -22,6 +25,13 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='.', intents=intents)
 
 logging.basicConfig(filename='simulacra.log', encoding='utf-8', level=logging.WARNING)
+
+class ToMode:
+    def __init__(self, mode):
+        self.mode = mode
+
+    def __call__(self, image):
+        return image.convert(self.mode)
 
 if not os.path.exists("db.sqlite"):
     db = sqlite3.connect('db.sqlite')
@@ -295,17 +305,34 @@ class Jobs:
         response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
         self._gpu_table[int(job.device)] = None
         return ("INSERT INTO generations VALUES (?, ?, ?, ?, ?)",
-                (job.seed, interaction["uid"], response.id, 2, job.prompt))
+                (job.seed, interaction["uid"], response.id, 3, job.prompt))
         
     async def finish_upscale_job(self, interaction, job):
         upload_path = job.input.replace(".png", "_4x_upscale.png")
+        # Crunch down upscale so Discord won't choke
+        img = Image.open(upload_path)
+        to_rgb = ToMode('RGB')
+        resize = transforms.Resize(1600, interpolation=transforms.InterpolationMode.LANCZOS)
+        img = resize(to_rgb(img))
+        img.save(upload_path)
         upload = nextcord.File(upload_path)
         channel = bot.get_channel(interaction["cid"])
         coroutine = channel.send(
             "'" + job.prompt + f"' upscaled by {interaction['mention']}",
             file=upload
         )
-        response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
+        try:
+            response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
+        except nextcord.errors.HTTPException:
+            upload = nextcord.File(job.input)
+            coroutine = channel.send(f"{interaction['mention']}, "
+                                     "Your upscale was too large to attach "
+                                     "even after downscale to 1600x1600."
+                                     " Here's the original.",
+                                     file=upload
+            )
+            response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
+                        
         self._gpu_table[int(job.device)] = None
         return ("INSERT INTO upscales VALUES (?,?)", (job.iid, 0))
 
