@@ -502,8 +502,8 @@ class AbstractButtons(nextcord.ui.View):
     async def filler5(self, button, interaction):
         pass
         
-    @nextcord.ui.button(label="Grid", custom_id="grid", disabled=True, row=4)
-    async def grid(self, button, interaction):
+    @nextcord.ui.button(label="Batch", custom_id="batch", disabled=True, row=4)
+    async def batch(self, button, interaction):
         gen = generations.get_gen_from_mid(interaction.message.id)
         if interaction.user.id != gen[1]:
             await interaction.user.send("Only the user that generated an output can get its grid.")
