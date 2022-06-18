@@ -842,37 +842,35 @@ class RatingSurvey(AbstractButtons):
              "survey/6532_krita_digital_masterpiece_of_the_tower_of_babel_as_a_series_of_neural_net_layers_3.png")
             
         ]
-
-    def get_next_image_for_user(self, user):
-        # We need to always get the correct next image for the user even if they
-        # partially complete the survey and then abandon it between bot reboots.
-        # This way it's not possible for a user to get stuck in the signup process.
-        db = sqlite3.connect('db.sqlite')
-        cursor = db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM survey WHERE uid=?",
-                       (user.id,))
-        index = cursor.fetchone()[0]
-        cursor.close()
-        db.close()
-        return index
+        # The survey used to record responses one at a time
+        # this produced some kind of bug I don't even want to attempt
+        # to hunt down where you would get more than 20 responses from a user.
+        # So now we're just adding as many constraints as possible:
+        # length must be 20, we add all the rating responses at once as a batch,
+        # ratings must match the text of the prompt shown on the message,
+        # we use a dictionary so that a repeated send just sets the same slot
+        # in the survey rather than creating a duplicate. Hopefully this prevents
+        # further problems.
+        self.ratings = {}
+        for i in range(20):
+            self.ratings[self.survey_images[i][0]] = None
+        self.index = 0
         
     async def rate(self, interaction, rating):
-        index = self.get_next_image_for_user(interaction.user)
-        db = sqlite3.connect('db.sqlite')
-        cursor = db.cursor()
-        cursor.execute("INSERT INTO survey VALUES (?,?,?)",
-                       (interaction.user.id, index, rating))
-        db.commit()
-        cursor.close()
-        db.close()
-        index = self.get_next_image_for_user(interaction.user)
-        if index < 20:
-            prompt, path = self.survey_images[index]
+        try:
+            assert interaction.message.content == self.survey_images[self.index][0]
+        except AssertionError:
+            await interaction.user.send("Your survey desynced, type `.signup` to try again.")
+        self.ratings[interaction.message.content] = rating
+        self.index += 1
+        if self.index < 20:
+            prompt, path = self.survey_images[self.index]
             upload = nextcord.File(path)
-            await interaction.user.send(f"{index + 1}. " + prompt,
+            await interaction.user.send(prompt,
                                         file=upload,
                                         view=self)
         else:
+            self.record_survey(interaction.user.id)
             db = sqlite3.connect('db.sqlite')
             cursor = db.cursor()
             cursor.execute("INSERT INTO users VALUES (?,?,?,?,?)",
@@ -881,9 +879,26 @@ class RatingSurvey(AbstractButtons):
             cursor.close()
             db.close()
             await interaction.user.send("The survey is finished! You can now use the bot.")
-            await interaction.user.send("You can do so by typing `.add <prompt>`"
-                                        " into the channel you first interacted with the bot in.")
+            await interaction.user.send("**You can do so by typing `.add PROMPT`"
+                                        " into the channel you first interacted with the bot in.**")
+            await interaction.user.send("Please **rate images frequently**. Each "
+                                        "rating is used to create models/datasets like "
+                                        "LAION aesthetic "
+                                        "(https://github.com/LAION-AI/laion-datasets/blob/main/laion-aesthetic.md)."
+            )
 
+    def record_survey(self, user_id):
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        for index, img in enumerate(self.survey_images):
+            prompt, path = img
+            assert self.ratings[prompt]
+            cursor.execute("INSERT INTO survey VALUES (?,?,?)",
+                           (user_id, index, self.ratings[prompt]))
+        db.commit()
+        cursor.close()
+        db.close()
+            
 class AgreementSelect(nextcord.ui.View):
     def __init__(self):
         super().__init__()
@@ -901,8 +916,7 @@ class AgreementSelect(nextcord.ui.View):
     async def agreement(self, select, interaction):
         if select.values[0]:
             view = RatingSurvey()
-            index = view.get_next_image_for_user(interaction.user)
-            prompt, path = view.survey_images[index]
+            prompt, path = view.survey_images[0]
             upload = nextcord.File(path)
             await interaction.user.send("Before you can use the bot you need to"
                                         " answer a quick 20 question rating task"
@@ -926,7 +940,7 @@ class AgreementSelect(nextcord.ui.View):
                                         "fit. Sometimes the AI produces good looking "
                                         "but poorly fitting images, these should be "
                                         "rated highly because they look good.\n\n")
-            await interaction.user.send(f"{index + 1}. " + prompt,
+            await interaction.user.send(prompt,
                                   file=upload,
                                   view=view)
     
