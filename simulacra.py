@@ -205,7 +205,7 @@ class Jobs:
                 for job_time in enumerate(self._gpu_table):
                     # Clear out stuck job registers/timeout                   
                     i,t = job_time
-                    if (time.time() - t) >= 120:
+                    if (time.time() - t) >= 300:
                         self._gpu_table[i] = None
                 time.sleep(0.25)
                 continue
