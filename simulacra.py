@@ -984,8 +984,8 @@ async def add(interaction: nextcord.Interaction):
     if interaction.channel.id not in channel_whitelist:
         return
     for word in banned_words:
-        if (' ' + word) in interaction.message.content:
-            await interaction.send("'{}' is not an allowed word by the NSFW filter".format(word))
+        if (' ' + word.lower()) in interaction.message.content.lower():
+            await interaction.send("'{}' is not an allowed word by the content filter".format(word))
             return
     prompt = interaction.message.content.split(".add")[1].strip()
     if len(prompt) > 255:
