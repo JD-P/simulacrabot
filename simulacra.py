@@ -1058,7 +1058,7 @@ async def add(interaction: nextcord.Interaction):
             await interaction.send("'{}' is not an allowed word by the content filter".format(word))
             return
     prompt = interaction.message.content.split(".add")[1].strip()
-    if len(prompt) > 255:
+    if len(prompt) > 246: # Must be able to fit _grid.png on end.
         await interaction.send("The length of the prompt wouldn't fit on the "
                                "filesystem. Please shorten it and try again.")
         return
