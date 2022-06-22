@@ -525,7 +525,6 @@ class AbstractButtons(nextcord.ui.View):
             embed=embed
         )
         button.style = nextcord.ButtonStyle.green
-        button.disabled = True
         await interaction.message.edit(view=self)
         
     @nextcord.ui.button(label="------", custom_id="spacer2", disabled=True,
