@@ -508,7 +508,7 @@ class AbstractButtons(nextcord.ui.View):
         db = sqlite3.connect('db.sqlite')
         cursor = db.cursor()
         cursor.execute("SELECT * FROM images WHERE gid=?", (gen[0],))
-        image_id = cursor.fetchall()[1][2]
+        image_id = cursor.fetchall()[1][0]
         cursor.execute("SELECT COUNT(*) from ratings where iid=?", (image_id,))
         ratings_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) from flags where iid=?", (image_id,))
@@ -518,11 +518,12 @@ class AbstractButtons(nextcord.ui.View):
         embed = nextcord.Embed(title="Feedback", description="")
         embed.add_field(name="Ratings", value=ratings_count)
         embed.add_field(name="Flags", value=flags)
-        await interaction.user.send(
+        await interaction.response.send_message(
             "2. " + prompt,
             file=upload,
             view=view,
-            embed=embed
+            embed=embed,
+            ephemeral=True
         )
         button.style = nextcord.ButtonStyle.green
         await interaction.message.edit(view=self)
@@ -718,16 +719,10 @@ class BatchRateStream(AbstractButtons):
         # Make sure our ratings are in sync
         assert (f"{index[2]}. " + generation[-1]) == message.content
         ratings.record_rating(interaction.user.id, generation[0], rating, index = index[2])
-        # Update number of ratings
-        num_ratings = int(message.embeds[0].fields[0].value)
-        num_ratings += 1
-        embed = message.embeds[0].set_field_at(0, name="Ratings",
-                                               value=num_ratings)
-        await message.edit(view=self, embed=embed)
         if not self.image_ids: # End condition
             return
-        # Send next message in the chain
         
+        # Send next message in the chain
         db = sqlite3.connect('db.sqlite')
         cursor = db.cursor()
         cursor.execute("SELECT COUNT(*) from ratings where iid=?", (self.image_ids[-1][0],))
@@ -742,11 +737,12 @@ class BatchRateStream(AbstractButtons):
         upload = nextcord.File(str(generation[0]) + "_" + generation[-1].replace(" ", "_").replace("/","_") +
                            "_" + str(self.image_ids[-1][2]) + ".png")
         
-        await interaction.user.send(
+        await interaction.response.send_message(
             f"{self.image_ids[-1][2]}. " + generation[-1],
             file=upload,
             embed=embed,
-            view=self)
+            view=self,
+            ephemeral=True)
 
     @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
     async def flag(self, button, interaction):
