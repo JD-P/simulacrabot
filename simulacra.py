@@ -163,13 +163,14 @@ def do_upscale_job(messages, interaction, job):
         
 class Jobs:
     """Job controller for SimulacraBot"""
-    def __init__(self, channels, dbpath='db.sqlite'):
+    def __init__(self, channels, qchannels, dbpath='db.sqlite'):
         self._gpu_table = [None for i in range(torch.cuda.device_count())]
         self._pending = queue.Queue()
         self._scheduled = {}
         self._pending_messages = mp.Queue()
         self._dbpath = dbpath
         self._channels = channels
+        self._quiet_channels = qchannels
         
     async def main(self):
         last_rate_prompt = time.time()
@@ -252,6 +253,8 @@ class Jobs:
                        HAVING num_ratings == 0;''')
         to_rate = cursor.fetchall()
         for cid in self._channels:
+            if cid in self._quiet_channels:
+                continue
             try:
                 gen = secrets.choice(to_rate)
             except IndexError:
@@ -1280,7 +1283,13 @@ if __name__ == '__main__' :
             
     with open('channel_whitelist.txt') as infile:
         channel_whitelist = [int(channel.strip()) for channel in infile.readlines()]
-        
+
+    if os.path.exists('quiet_channels.txt'):
+        with open("quiet_channels.txt") as infile:
+            quiet_channels = [int(channel.strip()) for channel in infile.readlines()]
+    else:
+        quiet_channels = []
+            
     with open('banned_words.txt') as infile:
         banned_words = [word.strip() for word in infile.readlines()]
     
@@ -1293,7 +1302,7 @@ if __name__ == '__main__' :
     generations = Generations('db.sqlite')
     ratings = Ratings('db.sqlite')
     flags = Flags('db.sqlite')
-    jobs = Jobs(channel_whitelist, 'db.sqlite')
+    jobs = Jobs(channel_whitelist, quiet_channels, 'db.sqlite')
 
     jobs_thread = threading.Thread(
         target=asyncio.run,
