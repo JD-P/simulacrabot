@@ -1132,7 +1132,39 @@ async def rate(interaction: nextcord.Interaction):
         file=upload,
         embed=embed,
         view=view)
-            
+
+@bot.command()
+async def review(interaction: nextcord.Interaction):
+    if type(interaction.channel) != nextcord.channel.DMChannel:
+        return
+    gid, idx = interaction.message.content.split(".review")[1].strip().split(" ")
+    gid, idx = int(gid), int(idx)
+    view = RatingButtons(gid, index=idx)
+    db = sqlite3.connect('db.sqlite')
+    cursor = db.cursor()
+    cursor.execute("SELECT * FROM generations where id=?", (gid,))
+    gen = cursor.fetchone()
+    cursor.execute("SELECT * FROM images WHERE gid=? AND idx=?",
+                   (gid, idx))
+    image_id = cursor.fetchone()
+    cursor.execute("SELECT COUNT(*) from ratings where iid=?", (image_id[0],))
+    ratings = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) from flags where iid=?", (image_id[0],))
+    flags = cursor.fetchone()[0]
+    cursor.close()
+    db.close()
+    embed = nextcord.Embed(title="Feedback", description="")
+    embed.add_field(name="Ratings", value=ratings)
+    embed.add_field(name="Flags", value=flags)
+    upload = nextcord.File(str(gen[0]) + "_" + gen[-1].replace(" ", "_").replace("/","_") +
+                           "_" + str(idx) + ".png")
+        
+    await interaction.channel.send(
+        gen[-1],
+        file=upload,
+        embed=embed,
+        view=view)
+    
 @bot.command()
 async def export(interaction: nextcord.Interaction):
     if type(interaction.channel) != nextcord.channel.DMChannel:
