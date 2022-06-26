@@ -521,12 +521,11 @@ class AbstractButtons(nextcord.ui.View):
         embed = nextcord.Embed(title="Feedback", description="")
         embed.add_field(name="Ratings", value=ratings_count)
         embed.add_field(name="Flags", value=flags)
-        await interaction.response.send_message(
+        await interaction.user.send(
             "2. " + prompt,
             file=upload,
             view=view,
-            embed=embed,
-            ephemeral=True
+            embed=embed
         )
         button.style = nextcord.ButtonStyle.green
         await interaction.message.edit(view=self)
@@ -722,6 +721,12 @@ class BatchRateStream(AbstractButtons):
         # Make sure our ratings are in sync
         assert (f"{index[2]}. " + generation[-1]) == message.content
         ratings.record_rating(interaction.user.id, generation[0], rating, index = index[2])
+        # Update number of ratings
+        num_ratings = int(message.embeds[0].fields[0].value)
+        num_ratings += 1
+        embed = message.embeds[0].set_field_at(0, name="Ratings",
+                                               value=num_ratings)
+        await message.edit(view=self, embed=embed)
         if not self.image_ids: # End condition
             return
         
@@ -740,12 +745,11 @@ class BatchRateStream(AbstractButtons):
         upload = nextcord.File(str(generation[0]) + "_" + generation[-1].replace(" ", "_").replace("/","_") +
                            "_" + str(self.image_ids[-1][2]) + ".png")
         
-        await interaction.response.send_message(
+        await interaction.user.send(
             f"{self.image_ids[-1][2]}. " + generation[-1],
             file=upload,
             embed=embed,
-            view=self,
-            ephemeral=True)
+            view=self)
 
     @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
     async def flag(self, button, interaction):
