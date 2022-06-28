@@ -934,7 +934,7 @@ async def add(interaction: nextcord.Interaction):
         if (' ' + word) in interaction.message.content:
             await interaction.send("'{}' is not an allowed word by the NSFW filter".format(word))
             return
-    prompt = thing.replace(".add ", "").strip()
+    prompt = interaction.message.content.replace(".add ", "").strip()
     if len(prompt) > 255:
         await interaction.send("The length of the prompt wouldn't fit on the "
                                "filesystem. Please shorten it and try again.")
