@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import secrets
 import io
@@ -934,7 +935,7 @@ async def add(interaction: nextcord.Interaction):
         if (' ' + word) in interaction.message.content:
             await interaction.send("'{}' is not an allowed word by the NSFW filter".format(word))
             return
-    prompt = interaction.message.content.replace(".add ", "").strip()
+    prompt = re.sub("\.add\s+", "", prompt)
     if len(prompt) > 255:
         await interaction.send("The length of the prompt wouldn't fit on the "
                                "filesystem. Please shorten it and try again.")
