@@ -7,6 +7,7 @@ from tqdm import tqdm, trange
 from itertools import islice
 from einops import rearrange
 from torchvision.utils import make_grid
+from seed_all import seed_all
 
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
@@ -147,7 +148,14 @@ def main(opt):
         default="logs/f8-kl-clip-encoder-256x256-run1/checkpoints/last.ckpt",
         help="path to checkpoint of model",
     )
-    #opt = parser.parse_args()
+
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="seed for seed_all",
+    )
+    # opt = parser.parse_args()
+    seed_all(opt.seed)
     opt.n_rows = 1
     opt.config = "stable-diffusion/configs/stable-diffusion/txt2img-1p4B-multinode-clip-encoder-high-res-512-inference.yaml"
     opt.ckpt = "256f8ft512-2022-06-15-pruned.ckpt"

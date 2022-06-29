@@ -1065,11 +1065,11 @@ async def add(interaction: nextcord.Interaction):
             await interaction.send("'{}' is not an allowed word by the content filter".format(word))
             return
     prompt = interaction.message.content.split(".add")[1].strip()
-    if len(prompt) > 246: # Must be able to fit _grid.png on end.
-        await interaction.send("The length of the prompt wouldn't fit on the "
-                               "filesystem. Please shorten it and try again.")
-        return
     seed = generations.get_next_seed()
+    if len(prompt) > (255 - 10 - len(str(seed))): # Must be able to fit <seed>_<prompt>_grid.png so inference doesn't crash
+        await interaction.send("The length of the prompt wouldn't fit on the "
+                               "filesystem, current max length is {}. Please shorten it and try again.".format((255 - 10 - len(str(seed)))))
+        return
     job = Job(prompt=prompt,
               cloob_checkpoint='cloob_laion_400m_vit_b_16_16_epochs',
               scale=5.,
