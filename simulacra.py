@@ -1064,7 +1064,7 @@ async def add(interaction: nextcord.Interaction):
         if (' ' + word.lower()) in interaction.message.content.lower():
             await interaction.send("'{}' is not an allowed word by the content filter".format(word))
             return
-    prompt = interaction.message.content.split(".add")[1].strip()
+    prompt = re.sub("\.add\s+", "", interaction.message.content).strip()
     seed = generations.get_next_seed()
     if len(prompt) > (255 - 10 - len(str(seed))): # Must be able to fit <seed>_<prompt>_grid.png so inference doesn't crash
         await interaction.send("The length of the prompt wouldn't fit on the "
