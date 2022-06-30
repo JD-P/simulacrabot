@@ -194,7 +194,7 @@ class Jobs:
                     query, params = await self.finish_gen_job(response[0],
                                                               response[1])
                     cursor.execute(query, params)
-                    for i in range(1,5):
+                    for i in range(1, response[1].n_samples + 1):
                         cursor.execute("INSERT INTO images(gid, idx) VALUES (?,?)",
                                        (params[0], i))
                 db.commit()
@@ -309,7 +309,7 @@ class Jobs:
         response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
         self._gpu_table[int(job.device)] = None
         return ("INSERT INTO generations VALUES (?, ?, ?, ?, ?)",
-                (job.seed, interaction["uid"], response.id, 3, job.prompt))
+                (job.seed, interaction["uid"], response.id, job.scale, job.prompt))
         
     async def finish_upscale_job(self, interaction, job):
         upload_path = job.input.replace(".png", "_4x_upscale.png")
@@ -507,7 +507,7 @@ class AbstractButtons(nextcord.ui.View):
         prompt = gen[-1]
         upload = nextcord.File(str(gen[0]) + "_" + gen[-1].replace(" ", "_").replace("/","_") +
                            "_2" + ".png")
-        view = BatchRateStream(gen[0], [2,3,4])
+        view = BatchRateStream(gen[0], [2,3,4,5,6])
         db = sqlite3.connect('db.sqlite')
         cursor = db.cursor()
         cursor.execute("SELECT * FROM images WHERE gid=?", (gen[0],))
@@ -1072,15 +1072,15 @@ async def add(interaction: nextcord.Interaction):
         return
     job = Job(prompt=prompt,
               cloob_checkpoint='cloob_laion_400m_vit_b_16_16_epochs',
-              scale=5.,
+              scale=secrets.choice([4,5,6,7]),
               cutn=32,
               device='cuda:0',
               ddim_eta=0.,
               method='ddim',
-              H=512,
-              W=512,
+              H=768,
+              W=768,
               n_iter=1,
-              n_samples=4,
+              n_samples=6,
               seed=seed,
               ddim_steps=50,
               plms=True)

@@ -1,5 +1,6 @@
 import argparse, os, sys, glob
 import torch
+from pytorch_lightning import seed_everything
 import numpy as np
 from omegaconf import OmegaConf
 from PIL import Image
@@ -157,10 +158,14 @@ def main(opt):
     # opt = parser.parse_args()
     seed_all(opt.seed)
     opt.n_rows = 1
-    opt.config = "stable-diffusion/configs/stable-diffusion/txt2img-1p4B-multinode-clip-encoder-high-res-512-inference.yaml"
-    opt.ckpt = "256f8ft512-2022-06-15-pruned.ckpt"
+    opt.config = "stable-diffusion/configs/stable-diffusion/txt2img-multinode-clip-encoder-f16-768-laion-hr-inference.yaml"
+    opt.ckpt = "f16-33k+12k-hr_pruned.ckpt"
     opt.dyn = None
+    opt.C = 16
+    opt.f = 16
 
+    seed_everything(opt.seed)
+    
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
 
@@ -189,7 +194,7 @@ def main(opt):
                     if isinstance(prompts, tuple):
                         prompts = list(prompts)
                     c = model.get_learned_conditioning(prompts)
-                    shape = [4, opt.H//8, opt.W//8]
+                    shape = [opt.C, opt.H//opt.f, opt.W//opt.f]
                     samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                      conditioning=c,
                                                      batch_size=opt.n_samples,
