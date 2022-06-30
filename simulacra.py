@@ -1072,7 +1072,7 @@ async def add(interaction: nextcord.Interaction):
         return
     job = Job(prompt=prompt,
               cloob_checkpoint='cloob_laion_400m_vit_b_16_16_epochs',
-              scale=secrets.choice([4,5,6,7]),
+              scale=secrets.choice([7,8,9,10]),
               cutn=32,
               device='cuda:0',
               ddim_eta=0.,
