@@ -1,6 +1,5 @@
 import argparse, os, sys, glob
 import torch
-from pytorch_lightning import seed_everything
 import numpy as np
 from omegaconf import OmegaConf
 from PIL import Image
@@ -8,6 +7,7 @@ from tqdm import tqdm, trange
 from itertools import islice
 from einops import rearrange
 from torchvision.utils import make_grid
+from seed_all import seed_all
 
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
@@ -148,7 +148,15 @@ def main(opt):
         default="logs/f8-kl-clip-encoder-256x256-run1/checkpoints/last.ckpt",
         help="path to checkpoint of model",
     )
-    #opt = parser.parse_args()
+
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="seed for seed_all",
+    )
+    # opt = parser.parse_args()
+    seed_all(opt.seed)
+
     opt.n_rows = 1
     opt.config = "stable-diffusion/configs/stable-diffusion/txt2img-multinode-clip-encoder-f16-768-laion-hr-inference.yaml"
     opt.ckpt = "f16-33k+12k-hr_pruned.ckpt"
@@ -156,8 +164,6 @@ def main(opt):
     opt.C = 16
     opt.f = 16
 
-    seed_everything(opt.seed)
-    
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
 
@@ -207,11 +213,11 @@ def main(opt):
                 outs = all_samples[0]
                 for index, out in enumerate(outs):
                     print(out.shape)
-                    outpath = str(opt.seed) + "_" + opt.prompt.replace(" ", "_").replace("/","_") + "_" + str(index + 1) + ".png"
+                    outpath = str(opt.scale) + "_" + str(opt.seed) + "_" + opt.prompt.replace(" ", "_").replace("/","_") + "_" + str(index + 1) + ".png"
                     out = 255. * rearrange(out.cpu().numpy(), 'c h w -> h w c')
                     Image.fromarray(out.astype(np.uint8)).save(outpath)
 
-                gridpath = str(opt.seed) + "_" + opt.prompt.replace(" ", "_").replace("/","_") + "_grid" + ".png"
+                gridpath = str(opt.scale) + "_" + opt.str(opt.seed) + "_" + opt.prompt.replace(" ", "_").replace("/","_") + "_grid" + ".png"
                 grid = torch.stack(all_samples, 0)
                 grid = rearrange(grid, 'n b c h w -> (n b) c h w')
                 grid = make_grid(grid, nrow=opt.n_samples)
