@@ -197,6 +197,12 @@ class Jobs:
                     for i in range(1, response[1].n_samples + 1):
                         cursor.execute("INSERT INTO images(gid, idx) VALUES (?,?)",
                                        (params[0], i))
+                    if response[1].autoflagged:
+                        cursor.execute("SELECT * FROM images WHERE gid=?", (params[0],))
+                        image_id = cursor.fetchone()[0]
+                        cursor.execute("INSERT INTO flags VALUES (?,?)",
+                                       (621583764174143488,
+                                        image_id))
                 db.commit()
                 cursor.close()
                 db.close()
@@ -298,7 +304,7 @@ class Jobs:
         view = GenerationButtons()
         embed = nextcord.Embed(title="Feedback", description="")
         embed.add_field(name="Ratings", value=0)
-        embed.add_field(name="Flags", value=0)
+        embed.add_field(name="Flags", value=1 if job.autoflagged else 0)
         upload = nextcord.File(str(job.seed) + "_" + job.prompt.replace(" ", "_").replace("/","_") +
                                "_1" + ".png")
         channel = bot.get_channel(interaction["cid"])
@@ -1035,7 +1041,7 @@ class AgreementSelect(nextcord.ui.View):
     
 class Job:
     def __init__(self, prompt, cloob_checkpoint, scale, cutn, device, ddim_eta,
-                 method, H, W, n_iter, n_samples, seed, ddim_steps, plms):
+                 method, H, W, n_iter, n_samples, seed, ddim_steps, plms, autoflagged):
         self.prompt = prompt
         self.cloob_checkpoint = cloob_checkpoint
         self.scale = scale
@@ -1050,6 +1056,7 @@ class Job:
         self.seed = seed
         self.ddim_steps = ddim_steps
         self.plms = plms
+        self.autoflagged = autoflagged
 
 
 #@bot.slash_command(description="My first slash command", guild_ids=[TESTING_GUILD_ID])
@@ -1070,6 +1077,12 @@ async def add(interaction: nextcord.Interaction):
                                "filesystem. Please shorten it and try again.")
         return
     seed = generations.get_next_seed()
+    # Copyright filter
+    autoflagged = False
+    for phrase in autoflags:
+        if (' ' + phrase.lower()) in interaction.message.content.lower():
+            autoflagged = phrase
+            break
     job = Job(prompt=prompt,
               cloob_checkpoint='cloob_laion_400m_vit_b_16_16_epochs',
               scale=6,
@@ -1083,15 +1096,27 @@ async def add(interaction: nextcord.Interaction):
               n_samples=6,
               seed=seed,
               ddim_steps=50,
-              plms=True)
+              plms=True,
+              autoflagged=True if autoflagged else False)
     # Unobtrusively let user know we are generating
     success = jobs.submit(interaction, job)
     if success:
         await interaction.message.add_reaction('👍')
         await interaction.message.add_reaction('⏲️')
+        if autoflagged:
+            await interaction.channel.send(
+                "{} You just put in '{}' ".format(interaction.message.author.mention,
+                                                  autoflagged) +
+                "which is in the autoflag list. Your prompt will be reviewed "
+                "by a moderator to determine if it is fair use or appropriate "
+                "handling of a sensitive subject. Keep in mind that repeated "
+                "submission of prompts found to be in violation of the rules "
+                "will lead to your ban from SimulacraBot. See the FAQ for "
+                "more details.")
     else:
         await interaction.message.add_reaction('👎')
         await interaction.message.add_reaction('2️⃣')
+
 
 @bot.command()
 async def rate(interaction: nextcord.Interaction):
@@ -1328,7 +1353,10 @@ if __name__ == '__main__' :
             
     with open('banned_words.txt') as infile:
         banned_words = [word.strip() for word in infile.readlines()]
-    
+
+    with open('autoflags.txt') as infile:
+        autoflags = [word.strip() for word in infile.readlines()]
+        
     with open('token.txt') as infile:
         token = infile.read().strip()
 
