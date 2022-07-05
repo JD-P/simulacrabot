@@ -15,7 +15,7 @@ import threading
 import queue
 import nextcord
 from nextcord.ext import commands
-from simulacra_imagen_sample import main as gen # TODO: Change this to not-gen
+from simulacra_imagen_512_sample import main as gen # TODO: Change this to not-gen
 # Global conflicts with other variables
 from yfcc_upscale import main as upscale
 from collections import namedtuple
@@ -309,7 +309,7 @@ class Jobs:
         response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
         self._gpu_table[int(job.device)] = None
         return ("INSERT INTO generations VALUES (?, ?, ?, ?, ?)",
-                (job.seed, interaction["uid"], response.id, job.scale, job.prompt))
+                (job.seed, interaction["uid"], response.id, 11, job.prompt))
         
     async def finish_upscale_job(self, interaction, job):
         upload_path = job.input.replace(".png", "_4x_upscale.png")
@@ -1072,13 +1072,13 @@ async def add(interaction: nextcord.Interaction):
     seed = generations.get_next_seed()
     job = Job(prompt=prompt,
               cloob_checkpoint='cloob_laion_400m_vit_b_16_16_epochs',
-              scale=7,
+              scale=6,
               cutn=32,
               device='cuda:0',
               ddim_eta=0.,
               method='ddim',
-              H=768,
-              W=768,
+              H=512,
+              W=512,
               n_iter=1,
               n_samples=6,
               seed=seed,
