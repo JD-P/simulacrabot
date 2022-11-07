@@ -3,11 +3,6 @@ import time
 import secrets
 import io
 import json
-import torch
-from torch import multiprocessing as mp
-from PIL import Image
-from torchvision.io import read_image
-from torchvision import transforms
 import logging
 import sqlite3
 import asyncio
@@ -15,9 +10,7 @@ import threading
 import queue
 import nextcord
 from nextcord.ext import commands
-from simulacra_imagen_512_sample import main as gen # TODO: Change this to not-gen
-# Global conflicts with other variables
-from yfcc_upscale import main as upscale
+from stability_sdk import client as ds_client
 from collections import namedtuple
 
 intents = nextcord.Intents.default()
@@ -25,7 +18,7 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='.', intents=intents)
 
-logging.basicConfig(filename='simulacra.log', encoding='utf-8', level=logging.WARNING)
+logging.basicConfig(filename='simulacra.log', level=logging.WARNING)
 
 class ToMode:
     def __init__(self, mode):
@@ -44,7 +37,7 @@ if not os.path.exists("db.sqlite"):
                       (uid INTEGER, qid INTEGER, rating INTEGER,
                       FOREIGN KEY(uid) REFERENCES users(id)
                       PRIMARY KEY(uid, qid))''')
-    # cursor.execute("INSERT INTO users VALUES (621583764174143488, 1, 0, 1)")
+    cursor.execute("INSERT INTO users VALUES (621583764174143488, 1, 0, 1)")
     cursor.execute('''CREATE TABLE generations
                            (id INTEGER PRIMARY KEY, uid INTEGER, mid INTEGER, 
                            method INTEGER, prompt TEXT, 
@@ -120,7 +113,7 @@ class Ratings:
     def __init__(self, dbpath):
         self.dbpath = dbpath
         
-    def record_rating(self, uid: int, gid: int, rating: int, index: int = 1):
+    def record_rating(self, uid: int, gid: int, rating: int, index: int = 0):
         db = sqlite3.connect(self.dbpath)
         cursor = db.cursor()
         cursor.execute("SELECT id FROM images WHERE gid=? AND idx=?",
@@ -150,15 +143,6 @@ class Flags:
         cursor.execute("INSERT INTO flags VALUES (?,?)", (uid, image_id))
         db.commit()
         db.close()
-
-
-def do_gen_job(messages, interaction, job):
-    gen(job)
-    messages.put((interaction,job))
-
-def do_upscale_job(messages, interaction, job):
-    upscale(job)
-    messages.put((interaction,job))
         
         
 class Jobs:
@@ -206,82 +190,6 @@ class Jobs:
                 db.commit()
                 cursor.close()
                 db.close()
-            if (time.time() - last_rate_prompt) >= 120:
-                await self.rate_prompt()
-                last_rate_prompt = time.time()
-            if None not in self._gpu_table:
-                for job_time in enumerate(self._gpu_table):
-                    # Clear out stuck job registers/timeout                   
-                    i,t = job_time
-                    if (time.time() - t) >= 300:
-                        self._gpu_table[i] = None
-                time.sleep(0.25)
-                continue
-            # Job dispatch
-            try:
-                next_job = self._pending.get(block=False)
-            except:
-                time.sleep(0.25)
-                continue
-            device_index = self._gpu_table.index(None)
-            self._gpu_table[device_index] = time.time()
-            interaction, job = self._scheduled[next_job].pop()
-            job.device = str(device_index)
-            os.environ['CUDA_VISIBLE_DEVICES'] = job.device
-            if type(job) == UpscaleJob:
-                # Make values picklable
-                interaction = {"cid":interaction.channel.id,
-                               "mention":interaction.user.mention}
-                upscale_job = mp.Process(
-                    target=do_upscale_job,
-                    args=(self._pending_messages,interaction,job)
-                )
-                upscale_job.start()
-            else:
-                # Make values picklable
-                interaction = {"cid":interaction.channel.id,
-                               "mention":interaction.message.author.mention,
-                               "uid":interaction.message.author.id}
-                gen_job = mp.Process(
-                    target=do_gen_job, 
-                    args=(self._pending_messages,interaction,job)
-                )
-                gen_job.start()
-
-    async def rate_prompt(self):
-        db = sqlite3.connect('db.sqlite')
-        cursor = db.cursor()
-        # Try finding images with no rating
-        cursor.execute('''SELECT generations.id, images.id, prompt, images.idx, COUNT(rating) as num_ratings FROM 
-                       generations LEFT OUTER JOIN images ON images.gid=generations.id
-                       LEFT OUTER JOIN ratings ON images.id=ratings.iid 
-                       GROUP BY images.id 
-                       HAVING num_ratings == 0;''')
-        to_rate = cursor.fetchall()
-        for cid in self._channels:
-            if cid in self._quiet_channels:
-                continue
-            try:
-                gen = secrets.choice(to_rate)
-            except IndexError:
-                return
-            view = RatingButtons(gen[0], index=gen[3])
-            embed = nextcord.Embed(title="Feedback", description="")
-            cursor.execute("SELECT COUNT(*) from ratings where iid=?", (gen[1],))
-            ratings = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) from flags where iid=?", (gen[1],))
-            flags = cursor.fetchone()[0]
-            embed.add_field(name="Ratings", value=ratings)
-            embed.add_field(name="Flags", value=flags)
-            upload = nextcord.File(str(gen[0]) + "_" + gen[2].replace(" ", "_").replace("/","_") +
-                               "_" + str(gen[3]) + ".png")
-            channel = bot.get_channel(cid)
-            coroutine = channel.send(
-                gen[2],
-                file=upload,
-                embed=embed,
-                view=view)
-            asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
                 
     def submit(self, interaction, job):
         try:
@@ -299,52 +207,7 @@ class Jobs:
             return True
         else:
             return False
-        
-    async def finish_gen_job(self, interaction, job):
-        view = GenerationButtons()
-        embed = nextcord.Embed(title="Feedback", description="")
-        embed.add_field(name="Ratings", value=0)
-        embed.add_field(name="Flags", value=1 if job.autoflagged else 0)
-        upload = nextcord.File(str(job.seed) + "_" + job.prompt.replace(" ", "_").replace("/","_") +
-                               "_1" + ".png")
-        channel = bot.get_channel(interaction["cid"])
-        coroutine = channel.send(
-            job.prompt + f" by {interaction['mention']}",
-            embed=embed,
-            file=upload, view=view)
-        response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
-        self._gpu_table[int(job.device)] = None
-        return ("INSERT INTO generations VALUES (?, ?, ?, ?, ?)",
-                (job.seed, interaction["uid"], response.id, 11, job.prompt))
-        
-    async def finish_upscale_job(self, interaction, job):
-        upload_path = job.input.replace(".png", "_4x_upscale.png")
-        # Crunch down upscale so Discord won't choke
-        img = Image.open(upload_path)
-        to_rgb = ToMode('RGB')
-        resize = transforms.Resize(1600, interpolation=transforms.InterpolationMode.LANCZOS)
-        img = resize(to_rgb(img))
-        img.save(upload_path)
-        upload = nextcord.File(upload_path)
-        channel = bot.get_channel(interaction["cid"])
-        coroutine = channel.send(
-            "'" + job.prompt + f"' upscaled by {interaction['mention']}",
-            file=upload
-        )
-        try:
-            response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
-        except nextcord.errors.HTTPException:
-            upload = nextcord.File(job.input)
-            coroutine = channel.send(f"{interaction['mention']}, "
-                                     "Your upscale was too large to attach "
-                                     "even after downscale to 1600x1600."
-                                     " Here's the original.",
-                                     file=upload
-            )
-            response = asyncio.run_coroutine_threadsafe(coroutine, bot.loop).result()
-                        
-        self._gpu_table[int(job.device)] = None
-        return ("INSERT INTO upscales VALUES (?,?)", (job.iid, 0))
+
 
 
 @bot.event
@@ -511,8 +374,7 @@ class AbstractButtons(nextcord.ui.View):
         cursor.close()
         db.close()
         prompt = gen[-1]
-        upload = nextcord.File(str(gen[0]) + "_" + gen[-1].replace(" ", "_").replace("/","_") +
-                           "_2" + ".png")
+        upload = nextcord.File(str(gen[0]) + "_1.png")
         view = BatchRateStream(gen[0], [2,3,4,5,6])
         db = sqlite3.connect('db.sqlite')
         cursor = db.cursor()
@@ -528,7 +390,7 @@ class AbstractButtons(nextcord.ui.View):
         embed.add_field(name="Ratings", value=ratings_count)
         embed.add_field(name="Flags", value=flags)
         await interaction.user.send(
-            "2. " + prompt,
+            "1. " + prompt,
             file=upload,
             view=view,
             embed=embed
@@ -568,7 +430,7 @@ class GenerationButtons(AbstractButtons):
 
 
 class RatingButtons(AbstractButtons):
-    def __init__(self, gid, index: int = 1):
+    def __init__(self, gid, index: int = 0):
         super().__init__()
         db = sqlite3.connect('db.sqlite')
         cursor = db.cursor()
@@ -675,8 +537,7 @@ class StreamRatingButtons(AbstractButtons):
         embed = nextcord.Embed(title="Feedback", description="")
         embed.add_field(name="Ratings", value=ratings_count)
         embed.add_field(name="Flags", value=flags)
-        upload = nextcord.File(str(gen[0]) + "_" + gen[2].replace(" ", "_").replace("/","_") +
-                           "_" + str(gen[3]) + ".png")
+        upload = nextcord.File(str(gen[0]) + "_" + str(gen[3]) + ".png")
         
         await interaction.user.send(
             gen[2],
@@ -748,8 +609,7 @@ class BatchRateStream(AbstractButtons):
         embed = nextcord.Embed(title="Feedback", description="")
         embed.add_field(name="Ratings", value=ratings_count)
         embed.add_field(name="Flags", value=flags)
-        upload = nextcord.File(str(generation[0]) + "_" + generation[-1].replace(" ", "_").replace("/","_") +
-                           "_" + str(self.image_ids[-1][2]) + ".png")
+        upload = nextcord.File(str(generation[0]) + "_" + str(self.image_ids[-1][2]) + ".png")
         
         await interaction.user.send(
             f"{self.image_ids[-1][2]}. " + generation[-1],
@@ -1038,28 +898,8 @@ class AgreementSelect(nextcord.ui.View):
             await interaction.user.send(prompt,
                                   file=upload,
                                   view=view)
-    
-class Job:
-    def __init__(self, prompt, cloob_checkpoint, scale, cutn, device, ddim_eta,
-                 method, H, W, n_iter, n_samples, seed, ddim_steps, plms, autoflagged):
-        self.prompt = prompt
-        self.cloob_checkpoint = cloob_checkpoint
-        self.scale = scale
-        self.cutn = cutn
-        self.device = device
-        self.ddim_eta = ddim_eta
-        self.method = method
-        self.H = H
-        self.W = W
-        self.n_iter = n_iter
-        self.n_samples = n_samples
-        self.seed = seed
-        self.ddim_steps = ddim_steps
-        self.plms = plms
-        self.autoflagged = autoflagged
 
 
-#@bot.slash_command(description="My first slash command", guild_ids=[TESTING_GUILD_ID])
 @bot.command()
 async def add(interaction: nextcord.Interaction):
     if not users.is_user(interaction.message.author.id):
@@ -1067,7 +907,7 @@ async def add(interaction: nextcord.Interaction):
         return
     if interaction.channel.id not in channel_whitelist:
         return
-    for word in banned_words:
+    for word in CONFIG["banned_words"]:
         if (' ' + word.lower()) in interaction.message.content.lower():
             await interaction.send("'{}' is not an allowed word by the content filter".format(word))
             return
@@ -1083,21 +923,48 @@ async def add(interaction: nextcord.Interaction):
         if (' ' + phrase.lower()) in interaction.message.content.lower():
             autoflagged = phrase
             break
-    job = Job(prompt=prompt,
-              cloob_checkpoint='cloob_laion_400m_vit_b_16_16_epochs',
-              scale=6,
-              cutn=32,
-              device='cuda:0',
-              ddim_eta=0.,
-              method='ddim',
-              H=512,
-              W=512,
-              n_iter=1,
-              n_samples=6,
-              seed=seed,
-              ddim_steps=50,
-              plms=True,
-              autoflagged=True if autoflagged else False)
+    client = ds_client.StabilityInference(key=CONFIG["ds_api_key"])
+    answers = client.generate(prompt=prompt,
+                                height=512,
+                                width=512,
+                                cfg_scale=7.0,
+                                steps=50,
+                                seed=seed,
+                                samples=6)
+    artifacts = ds_client.process_artifacts_from_answers("",
+                                                         "",
+                                                         answers,
+                                                         write=True,
+                                                         verbose=True)
+    filepaths = [i[0] for i in artifacts if i[0][1:][-3:] == 'png']
+    for idx, filepath in enumerate(filepaths):
+        os.rename(filepath, str(seed) + f"_{idx}.png")
+    # Send batch to the user(s) for rating
+    view = GenerationButtons()
+    embed = nextcord.Embed(title="Feedback", description="")
+    embed.add_field(name="Ratings", value=0)
+    embed.add_field(name="Flags", value=1 if autoflagged else 0)
+    upload = nextcord.File(str(seed) + "_0.png")
+    channel = interaction.channel
+    response = await channel.send(
+        prompt + f" by {interaction.author.mention}",
+        embed=embed,
+        file=upload, view=view)
+
+    
+    db = sqlite3.connect(CONFIG["db_path"])
+    cursor = db.cursor()
+    # Method 12: DreamStudio API on 2022-11-06, CLIP Guided(?)
+    cursor.execute("INSERT INTO generations VALUES (?, ?, ?, ?, ?)",
+                   (seed, interaction.author.id, response.id, 12, prompt))
+    for i in range(len(filepaths)):
+        cursor.execute("INSERT INTO images(gid, idx) VALUES (?,?)",
+                       (seed, i))
+    db.commit()
+    cursor.close()
+    db.close()
+    
+    """
     # Unobtrusively let user know we are generating
     success = jobs.submit(interaction, job)
     if success:
@@ -1116,6 +983,7 @@ async def add(interaction: nextcord.Interaction):
     else:
         await interaction.message.add_reaction('👎')
         await interaction.message.add_reaction('2️⃣')
+    """
 
 
 @bot.command()
@@ -1149,9 +1017,7 @@ async def rate(interaction: nextcord.Interaction):
     embed = nextcord.Embed(title="Feedback", description="")
     embed.add_field(name="Ratings", value=ratings)
     embed.add_field(name="Flags", value=flags)
-    upload = nextcord.File(str(gen[0]) + "_" + gen[-1].replace(" ", "_").replace("/","_") +
-                           "_" + str(view.index) + ".png")
-        
+    upload = nextcord.File(str(gen[0]) + "_" + str(view.index) + ".png")
     await interaction.channel.send(
         gen[-1],
         file=upload,
@@ -1288,7 +1154,7 @@ async def mod(interaction: nextcord.Interaction):
         cursor.execute("SELECT * FROM generations WHERE id=?", (image[1],))
         gen = cursor.fetchone()
         prompt = gen[-1]
-        img_path = str(gen[0]) + "_" + prompt.replace(" ", "_").replace("/","_") + "_grid" + ".png"
+        img_path = str(gen[0]) + "_grid.png"
         upload = nextcord.File(img_path)
         view = ModerationButtons(image[1])
         await interaction.message.author.send(
@@ -1341,38 +1207,23 @@ async def shutdown(interaction: nextcord.Interaction):
                                           "and then shut down the bot.")
 
 if __name__ == '__main__' :
-            
+
+    with open("config.json") as infile:
+        CONFIG = json.load(infile)
+    
     with open('channel_whitelist.txt') as infile:
         channel_whitelist = [int(channel.strip()) for channel in infile.readlines()]
-
-    if os.path.exists('quiet_channels.txt'):
-        with open("quiet_channels.txt") as infile:
-            quiet_channels = [int(channel.strip()) for channel in infile.readlines()]
-    else:
-        quiet_channels = []
-            
-    with open('banned_words.txt') as infile:
-        banned_words = [word.strip() for word in infile.readlines()]
 
     with open('autoflags.txt') as infile:
         autoflags = [word.strip() for word in infile.readlines()]
         
     with open('token.txt') as infile:
         token = infile.read().strip()
-
-    mp.set_start_method('spawn')
     
     users = Users('db.sqlite')
     generations = Generations('db.sqlite')
     ratings = Ratings('db.sqlite')
     flags = Flags('db.sqlite')
-    jobs = Jobs(channel_whitelist, quiet_channels, 'db.sqlite')
 
-    jobs_thread = threading.Thread(
-        target=asyncio.run,
-        args=(jobs.main(),)
-    )
-    jobs_thread.start()
-    
     bot.run(token)
 
