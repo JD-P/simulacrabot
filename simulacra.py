@@ -12,6 +12,7 @@ import nextcord
 from nextcord.ext import commands
 from stability_sdk import client as ds_client
 from collections import namedtuple
+from make_grid import main as make_grid
 
 intents = nextcord.Intents.default()
 intents.members = True
@@ -1154,8 +1155,13 @@ async def mod(interaction: nextcord.Interaction):
         cursor.execute("SELECT * FROM generations WHERE id=?", (image[1],))
         gen = cursor.fetchone()
         prompt = gen[-1]
-        img_path = str(gen[0]) + "_grid.png"
-        upload = nextcord.File(img_path)
+        filepaths = [str(gen[0]) + "_" + str(i) + ".png" for i in range(6)]
+        grid = make_grid(filepaths)
+        grid_file = io.BytesIO()
+        grid.save(grid_file, format="PNG")
+        grid_file.seek(0)
+        upload = nextcord.File(grid_file,
+                               filename=f"{gen[0]}_grid.png")
         view = ModerationButtons(image[1])
         await interaction.message.author.send(
             prompt,
