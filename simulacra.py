@@ -38,7 +38,9 @@ if not os.path.exists("db.sqlite"):
                       (uid INTEGER, qid INTEGER, rating INTEGER,
                       FOREIGN KEY(uid) REFERENCES users(id)
                       PRIMARY KEY(uid, qid))''')
-    cursor.execute("INSERT INTO users VALUES (621583764174143488, 1, 0, 1)")
+    cursor.execute('''CREATE TABLE credits
+                      (uid INTEGER, balance REAL,
+                      FOREIGN KEY(uid) REFERENCES users(id))''')
     cursor.execute('''CREATE TABLE generations
                            (id INTEGER PRIMARY KEY, uid INTEGER, mid INTEGER, 
                            method INTEGER, prompt TEXT, 
@@ -59,10 +61,6 @@ if not os.path.exists("db.sqlite"):
                            FOREIGN KEY(uid) REFERENCES users(id),
                            FOREIGN KEY(iid) REFERENCES images(id),
                            PRIMARY KEY(uid, iid))''')
-    cursor.execute('''CREATE TABLE upscales
-                           (iid INTEGER, method INTEGER,
-                           FOREIGN KEY(iid) REFERENCES images(id),
-                           PRIMARY KEY(iid))''')
     db.commit()
     cursor.close()
 
@@ -145,7 +143,45 @@ class Flags:
         db.commit()
         db.close()
 
+class Credits:
+    @staticmethod
+    def balance(uid):
+        db = sqlite3.connect(CONFIG['db_path'])
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM credits WHERE uid = ?',
+                       (uid,))
+        balance = cursor.fetchone()[0]
+        cursor.close()
+        db.close()
+        return balance
+    
+    @staticmethod
+    def debit_user(uid, amount):
+        db = sqlite3.connect(CONFIG['db_path'])
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM credits WHERE uid = ?',
+                       (uid,))
+        balance = cursor.fetchone()[0]
+        cursor.execute("UPDATE credits SET balance = ? WHERE uid = ?",
+                       (balance-amount,uid))
+        db.commit()
+        cursor.close()
+        db.close()
 
+    @staticmethod
+    def credit_user(uid, amount):
+        db = sqlite3.connect(CONFIG['db_path'])
+        cursor = db.cursor()
+        cursor.execute('SELECT balance FROM credits WHERE uid = ?',
+                       (uid,))
+        balance = cursor.fetchone()[0]
+        cursor.execute("UPDATE credits SET balance = ? WHERE uid = ?",
+                       (balance+amount,uid))
+        db.commit()
+        cursor.close()
+        db.close()
+        
+        
 @bot.event
 async def on_ready():
     print(f'We have logged in as {bot.user}')
@@ -310,28 +346,21 @@ class AbstractButtons(nextcord.ui.View):
         cursor.close()
         db.close()
         prompt = gen[-1]
-        upload = nextcord.File(str(gen[0]) + "_1.png")
-        view = BatchRateStream(gen[0], [2,3,4,5,6])
-        db = sqlite3.connect('db.sqlite')
-        cursor = db.cursor()
-        cursor.execute("SELECT * FROM images WHERE gid=?", (gen[0],))
-        image_id = cursor.fetchall()[1][0]
-        cursor.execute("SELECT COUNT(*) from ratings where iid=?", (image_id,))
-        ratings_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) from flags where iid=?", (image_id,))
-        flags = cursor.fetchone()[0]
-        cursor.close()
-        db.close()
-        embed = nextcord.Embed(title="Feedback", description="")
-        embed.add_field(name="Ratings", value=ratings_count)
-        embed.add_field(name="Flags", value=flags)
-        await interaction.user.send(
+        view = BatchClipOutGrid(gid)
+        filepaths = [str(gen[0]) + "_" + str(i) + ".png" for i in range(6)]
+        grid = make_grid(filepaths)
+        grid_file = io.BytesIO()
+        grid.save(grid_file, format="PNG")
+        grid_file.seek(0)
+        upload = nextcord.File(grid_file,
+                               filename=f"{gen[0]}_grid.png")
+        await interaction.message.channel.send(
             "1. " + prompt,
             file=upload,
             view=view,
-            embed=embed
         )
         button.style = nextcord.ButtonStyle.green
+        button.disabled = True
         await interaction.message.edit(view=self)
         
     @nextcord.ui.button(label="------", custom_id="spacer2", disabled=True,
@@ -409,36 +438,30 @@ class RatingButtons(AbstractButtons):
         
         
 class StreamRatingButtons(AbstractButtons):
-    def __init__(self):
+    def __init__(self, uid):
         super().__init__()
-        gen, ratings, flags = self.get_next_image_to_rate()
-        gid = gen[0]
-        db = sqlite3.connect('db.sqlite')
-        cursor = db.cursor()
-        cursor.execute("select * from generations where id=?", (gid,))
-        self.generation = cursor.fetchone()
-        self.index = gen[3]
-        cursor.close()
-        db.close()
-        
+        self._uid = uid
+        gen, img, ratings, flags = self.get_next_image_to_rate()
+        self.generation = gen
+        self.index = img[2]        
 
     def get_next_image_to_rate(self):
         db = sqlite3.connect('db.sqlite')
         cursor = db.cursor()
-        # Try finding images with no rating
-        cursor.execute('''SELECT generations.id, images.id, prompt, images.idx, COUNT(rating) as num_ratings FROM 
-                          generations LEFT OUTER JOIN images ON images.gid=generations.id
-                          LEFT OUTER JOIN ratings ON images.id=ratings.iid 
-                          GROUP BY images.id 
-                          HAVING num_ratings == 0;''')
-        gen = secrets.choice(cursor.fetchall())
-        cursor.execute("SELECT COUNT(*) from ratings where iid=?", (gen[1],))
+        # Find images the user hasn't rated yet
+        cursor.execute('''SELECT * FROM images WHERE id NOT IN (SELECT iid FROM ratings WHERE uid=?)''',
+                       (self._uid,))
+        unrated = secrets.choice(cursor.fetchall())
+        cursor.execute("SELECT * FROM generations WHERE id = ?",
+                       (unrated[1],))
+        gen = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) from ratings where iid=?", (unrated[0],))
         ratings = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) from flags where iid=?", (gen[1],))
+        cursor.execute("SELECT COUNT(*) from flags where iid=?", (unrated[0],))
         flags = cursor.fetchone()[0]
         cursor.close()
         db.close()
-        return gen, ratings, flags
+        return gen, unrated, ratings, flags
         
     async def rate(self, interaction, rating):
         # TODO: Let users update their rating
@@ -462,24 +485,25 @@ class StreamRatingButtons(AbstractButtons):
                                                value=num_ratings)
         await message.edit(view=self, embed=embed)
         # Send next message in the chain
-        gen, ratings_count, flags = self.get_next_image_to_rate()
-        db = sqlite3.connect('db.sqlite')
-        cursor = db.cursor()
-        cursor.execute("select * from generations where id=?", (gen[0],))
-        self.generation = cursor.fetchone()
-        self.index = gen[3]
-        cursor.close()
-        db.close()
+        try:
+            gen, img, ratings_count, flags = self.get_next_image_to_rate()
+        except IndexError:
+            await interaction.user.send("You've rated every image!")
+            return
+        self.generation = gen
+        self.index = img[2]
         embed = nextcord.Embed(title="Feedback", description="")
         embed.add_field(name="Ratings", value=ratings_count)
         embed.add_field(name="Flags", value=flags)
-        upload = nextcord.File(str(gen[0]) + "_" + str(gen[3]) + ".png")
+        upload = nextcord.File(str(gen[0]) + "_" + str(self.index) + ".png")
         
         await interaction.user.send(
-            gen[2],
+            gen[4],
             file=upload,
             embed=embed,
             view=self)
+
+        Credits.credit_user(self._uid, 0.2)
 
     @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
     async def flag(self, button, interaction):
@@ -496,7 +520,48 @@ class StreamRatingButtons(AbstractButtons):
                                                value=num_flags)
         await message.edit(embed=embed)
 
+class BatchClipOutGrid(nextcord.ui.View):
+    def __init__(self, gid):
+        super().__init__(timeout=None)
+        self.value = None
+        self._gid = gid
 
+    async def clipout(self, button, interaction, index):
+        if not users.is_user(interaction.user.id):
+            await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
+            return
+        upload = nextcord.File(str(self._gid) + "_" + str(index) + ".png")
+        await interaction.message.channel.send(interaction.user.mention,
+                                               file=upload)
+        button.label = "Submitted"
+        button.style = nextcord.ButtonStyle.green
+        button.disabled = True
+        await interaction.message.edit(view=self)
+        
+    @nextcord.ui.button(label="C1", custom_id="C1")
+    async def C1(self, button, interaction):
+        await self.clipout(button, interaction, 0)
+
+    @nextcord.ui.button(label="C2", custom_id="C2")
+    async def C2(self, button, interaction):
+        await self.clipout(button, interaction, 1)
+
+    @nextcord.ui.button(label="C3", custom_id="C3")
+    async def C3(self, button, interaction):
+        await self.clipout(button, interaction, 2)
+
+    @nextcord.ui.button(label="C4", custom_id="C4")
+    async def C4(self, button, interaction):
+        await self.clipout(button, interaction, 3)
+
+    @nextcord.ui.button(label="C5", custom_id="C5")
+    async def C5(self, button, interaction):
+        await self.clipout(button, interaction, 4)
+        
+    @nextcord.ui.button(label="C6", custom_id="C6")
+    async def C6(self, button, interaction):
+        await self.clipout(button, interaction, 5)
+        
 class BatchRateStream(AbstractButtons):
     def __init__(self, gid, indices):
         super().__init__()
@@ -766,6 +831,9 @@ class RatingSurvey(AbstractButtons):
             cursor = db.cursor()
             cursor.execute("INSERT INTO users VALUES (?,?,?,?,?)",
                            (interaction.user.id, 0, 0, 0, "deprecated"))
+            cursor.execute("INSERT INTO credits VALUES (?,?)",
+                           (interaction.user.id, 20))
+                   
             db.commit()
             cursor.close()
             db.close()
@@ -847,6 +915,11 @@ async def add(interaction: nextcord.Interaction):
         if (' ' + word.lower()) in interaction.message.content.lower():
             await interaction.send("'{}' is not an allowed word by the content filter".format(word))
             return
+    if Credits.balance(interaction.author.id) < 1:
+        await interaction.author.send("You don't have enough credits to"
+                                      + " use the bot. DM the bot .rate"
+                                      + " and contribute ratings to get"
+                                      + " more.")
     prompt = interaction.message.content.split(".add")[1].strip()
     seed = generations.get_next_seed()
     # Copyright filter
@@ -889,12 +962,11 @@ async def add(interaction: nextcord.Interaction):
     # Method 12: DreamStudio API on 2022-11-06, CLIP Guided(?)
     cursor.execute("INSERT INTO generations VALUES (?, ?, ?, ?, ?)",
                    (seed, interaction.author.id, response.id, 12, prompt))
-    for i in range(len(filepaths)):
-        cursor.execute("INSERT INTO images(gid, idx) VALUES (?,?)",
-                       (seed, i))
+    cursor.execute("INSERT INTO images(gid, idx) VALUES (?,?)", (seed, 0))
     db.commit()
     cursor.close()
     db.close()
+    Credits.debit_user(interaction.author.id, 1)
     
     """
     # Unobtrusively let user know we are generating
@@ -933,7 +1005,11 @@ async def rate(interaction: nextcord.Interaction):
     #                      GROUP BY images.id HAVING num_ratings < 3;''',
     #                   (interaction.message.author.id,))
     #    to_rate = cursor.fetchall()[:5]
-    view = StreamRatingButtons()
+    try:
+        view = StreamRatingButtons(interaction.author.id)
+    except IndexError:
+        await interaction.author.send("You've rated every image!")
+        return
     gen = view.generation
     db = sqlite3.connect('db.sqlite')
     cursor = db.cursor()
@@ -1098,6 +1174,22 @@ async def mod(interaction: nextcord.Interaction):
             prompt,
             view=view,
             file=upload)
+        cursor.close()
+        db.close()
+
+@bot.command()
+async def balance(interaction: nextcord.Interaction):
+    if type(interaction.channel) != nextcord.channel.DMChannel:
+        return
+    else:
+        db = sqlite3.connect('db.sqlite')
+        cursor = db.cursor()
+        cursor.execute("SELECT balance FROM credits where uid=?",
+                       (interaction.author.id,))
+        balance = cursor.fetchone()[0]
+        cursor.close()
+        db.close()
+        await interaction.message.author.send(balance)
 
 @bot.command()
 async def stats(interaction: nextcord.Interaction):
@@ -1163,4 +1255,3 @@ if __name__ == '__main__' :
     flags = Flags('db.sqlite')
 
     bot.run(token)
-
