@@ -11,6 +11,7 @@ import queue
 import nextcord
 from nextcord.ext import commands
 from stability_sdk import client as ds_client
+import stability_sdk.interfaces.gooseai.generation.generation_pb2 as generation
 from collections import namedtuple
 from make_grid import main as make_grid
 
@@ -186,75 +187,9 @@ class Credits:
 async def on_ready():
     print(f'We have logged in as {bot.user}')
 
-class UpscaleJob:
-    def __init__(self, input, iid, checkpoint, eta, output, seed, steps):
-        self.input = input
-        self.iid = iid
-        self.checkpoint = checkpoint
-        self.eta = eta
-        self.output = output
-        self.seed = seed
-        self.steps = steps
-
-class GridButtons(nextcord.ui.View):
-    def __init__(self, gen):
-        super().__init__(timeout=None)
-        self.gen = gen
-        self.value = None
-    
-    async def upscale(self, button, interaction, index):
-        gen = self.gen
-        if interaction.user.id != gen[1]:
-            await interaction.user.send("Only the user that generated an output "
-                                        "can upscale it. This output was generated"
-                                        f" by UID {gen[1]} and you are "
-                                        f"{interaction.user.id}.")
-            return
-        prompt = gen[-1]
-        img_path = str(gen[0]) + "_" + prompt.replace(" ", "_").replace("/","_") + "_" + str(index) + ".png"
-        db = sqlite3.connect('db.sqlite')
-        cursor = db.cursor()
-        cursor.execute("SELECT id FROM images WHERE gid=? AND idx=?",
-                       (gen[0], index))
-        image_id = cursor.fetchone()[0]
-        assert image_id
-        cursor.close()
-        db.close()
-        job = UpscaleJob(input=img_path,
-                         iid=image_id,
-                         checkpoint="yfcc_upscaler_2.ckpt",
-                         eta=1.,
-                         output=img_path.replace(".png", "_4x_upscale.png"),
-                         seed=gen[0],
-                         steps=150)
-        job.gen = gen
-        job.prompt = prompt
-        button.label = "Submitted"
-        button.style = nextcord.ButtonStyle.green
-        button.disabled = True
-        await interaction.message.edit(view=self)
-        jobs.submit(interaction, job)
-
-    @nextcord.ui.button(label="U1", custom_id="U1")
-    async def U1(self, button, interaction):
-        await self.upscale(button, interaction, 1)
-
-    @nextcord.ui.button(label="U2", custom_id="U2")
-    async def U2(self, button, interaction):
-        await self.upscale(button, interaction, 2)
-
-    @nextcord.ui.button(label="U3", custom_id="U3")
-    async def U3(self, button, interaction):
-        await self.upscale(button, interaction, 3)
-
-    @nextcord.ui.button(label="U4", custom_id="U4")
-    async def U4(self, button, interaction):
-        await self.upscale(button, interaction, 4)
-
-
 class AbstractButtons(nextcord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1200)
         self.value = None
 
     async def rate(self, interaction, rating):
@@ -355,7 +290,7 @@ class AbstractButtons(nextcord.ui.View):
         upload = nextcord.File(grid_file,
                                filename=f"{gen[0]}_grid.png")
         await interaction.message.channel.send(
-            "1. " + prompt,
+            prompt,
             file=upload,
             view=view,
         )
@@ -503,7 +438,7 @@ class StreamRatingButtons(AbstractButtons):
             embed=embed,
             view=self)
 
-        Credits.credit_user(self._uid, 0.2)
+        Credits.credit_user(self._uid, 0.5)
 
     @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
     async def flag(self, button, interaction):
@@ -522,7 +457,7 @@ class StreamRatingButtons(AbstractButtons):
 
 class BatchClipOutGrid(nextcord.ui.View):
     def __init__(self, gid):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1200)
         self.value = None
         self._gid = gid
 
@@ -562,79 +497,9 @@ class BatchClipOutGrid(nextcord.ui.View):
     async def C6(self, button, interaction):
         await self.clipout(button, interaction, 5)
         
-class BatchRateStream(AbstractButtons):
-    def __init__(self, gid, indices):
-        super().__init__()
-        db = sqlite3.connect('db.sqlite')
-        cursor = db.cursor()
-        cursor.execute("SELECT * FROM images WHERE gid=?", (gid,))
-        image_ids_ = cursor.fetchall()
-        cursor.execute("SELECT * FROM generations WHERE id=?", (gid,))
-        gen = cursor.fetchone()
-        self.gen = gen
-        self.image_ids = []
-        # Let us restrict the batch to things that need ratings
-        for index in indices:
-            self.image_ids.append(image_ids_[index-1])
-        self.image_ids = [i for i in reversed(self.image_ids)]
-        
-    async def rate(self, interaction, rating):
-        # TODO: Let users update their rating
-        if not users.is_user(interaction.user.id):
-            await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
-            return
-        message = interaction.message
-        generation = self.gen
-        index = self.image_ids.pop()
-        # Make sure our ratings are in sync
-        assert (f"{index[2]}. " + generation[-1]) == message.content
-        ratings.record_rating(interaction.user.id, generation[0], rating, index = index[2])
-        # Update number of ratings
-        num_ratings = int(message.embeds[0].fields[0].value)
-        num_ratings += 1
-        embed = message.embeds[0].set_field_at(0, name="Ratings",
-                                               value=num_ratings)
-        await message.edit(view=self, embed=embed)
-        if not self.image_ids: # End condition
-            return
-        
-        # Send next message in the chain
-        db = sqlite3.connect('db.sqlite')
-        cursor = db.cursor()
-        cursor.execute("SELECT COUNT(*) from ratings where iid=?", (self.image_ids[-1][0],))
-        ratings_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) from flags where iid=?", (self.image_ids[-1][0],))
-        flags = cursor.fetchone()[0]
-        cursor.close()
-        db.close()
-        embed = nextcord.Embed(title="Feedback", description="")
-        embed.add_field(name="Ratings", value=ratings_count)
-        embed.add_field(name="Flags", value=flags)
-        upload = nextcord.File(str(generation[0]) + "_" + str(self.image_ids[-1][2]) + ".png")
-        
-        await interaction.user.send(
-            f"{self.image_ids[-1][2]}. " + generation[-1],
-            file=upload,
-            embed=embed,
-            view=self)
-
-    @nextcord.ui.button(label="Flag", custom_id="flag", style=nextcord.ButtonStyle.danger, row=4)
-    async def flag(self, button, interaction):
-        if not users.is_user(interaction.user.id):
-            await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
-            return
-        message = interaction.message
-        flags.record_flag(interaction.user.id, self.gen[0], index = self.image_ids[-1][2])
-        # Update number of flags
-        num_flags = int(message.embeds[0].fields[1].value)
-        num_flags += 1
-        embed = message.embeds[0].set_field_at(1, name="Flags",
-                                               value=num_flags)
-        await message.edit(embed=embed)
-        
 class WarningSelect(nextcord.ui.View):
     def __init__(self, generation, recipient):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1200)
         self.value = None
         self.generation = generation
         self.recipient = recipient
@@ -657,7 +522,7 @@ class WarningSelect(nextcord.ui.View):
         
 class ModerationButtons(nextcord.ui.View):
     def __init__(self, gid):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1200)
         self.value = None
         db = sqlite3.connect('db.sqlite')
         cursor = db.cursor()
@@ -684,7 +549,7 @@ class ModerationButtons(nextcord.ui.View):
         view = WarningSelect(self.generation, user)
         await interaction.user.send("",
                               view=view)
-
+        
                 
     @nextcord.ui.button(label="Purge", custom_id="purge")
     async def purge(self, button, interaction):
@@ -920,6 +785,7 @@ async def add(interaction: nextcord.Interaction):
                                       + " use the bot. DM the bot .rate"
                                       + " and contribute ratings to get"
                                       + " more.")
+        return
     prompt = interaction.message.content.split(".add")[1].strip()
     seed = generations.get_next_seed()
     # Copyright filter
@@ -930,12 +796,13 @@ async def add(interaction: nextcord.Interaction):
             break
     client = ds_client.StabilityInference(key=CONFIG["ds_api_key"])
     answers = client.generate(prompt=prompt,
-                                height=512,
-                                width=512,
-                                cfg_scale=7.0,
-                                steps=50,
-                                seed=seed,
-                                samples=6)
+                              height=512,
+                              width=512,
+                              cfg_scale=10.0,
+                              sampler=generation.SAMPLER_K_EULER,
+                              steps=30,
+                              seed=seed,
+                              samples=6)
     artifacts = ds_client.process_artifacts_from_answers("",
                                                          "",
                                                          answers,
@@ -960,8 +827,9 @@ async def add(interaction: nextcord.Interaction):
     db = sqlite3.connect(CONFIG["db_path"])
     cursor = db.cursor()
     # Method 12: DreamStudio API on 2022-11-06, CLIP Guided(?)
+    # Method 13: K_EULER with 30 steps and CFG scale 10
     cursor.execute("INSERT INTO generations VALUES (?, ?, ?, ?, ?)",
-                   (seed, interaction.author.id, response.id, 12, prompt))
+                   (seed, interaction.author.id, response.id, 13, prompt))
     cursor.execute("INSERT INTO images(gid, idx) VALUES (?,?)", (seed, 0))
     db.commit()
     cursor.close()
@@ -1224,6 +1092,7 @@ async def shutdown(interaction: nextcord.Interaction):
         return
     if (not user) or (not user[1]):
         await interaction.message.author.send("This command is restricted to admins only.")
+        return
     bot.remove_command("add")
     @bot.command()
     async def add(interaction: nextcord.Interaction):
