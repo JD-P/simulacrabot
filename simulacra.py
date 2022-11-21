@@ -2,6 +2,7 @@ import os
 import time
 import secrets
 import io
+import re
 import json
 import logging
 import sqlite3
@@ -769,6 +770,8 @@ class AgreementSelect(nextcord.ui.View):
                                   view=view)
 
 
+mention_re = re.compile("<&?@[0-9]+>")
+            
 @bot.command()
 async def add(interaction: nextcord.Interaction):
     if not users.is_user(interaction.message.author.id):
@@ -785,6 +788,9 @@ async def add(interaction: nextcord.Interaction):
                                       + " use the bot. DM the bot .rate"
                                       + " and contribute ratings to get"
                                       + " more.")
+        return
+    if mention_re.search(interaction.message.content.lower()):
+        await interaction.send("You can't mention people in prompts.")
         return
     prompt = interaction.message.content.split(".add")[1].strip()
     seed = generations.get_next_seed()
