@@ -466,35 +466,37 @@ class BatchClipOutGrid(nextcord.ui.View):
         if not users.is_user(interaction.user.id):
             await interaction.user.send("You must agree to the TOS before using SimulacraBot. Type .signup")
             return
-        upload = nextcord.File(str(self._gid) + "_" + str(index) + ".png")
+        upload_path = str(self._gid) + "_" + str(index) + ".png"
+        upload = nextcord.File(upload_path)
         await interaction.message.channel.send(interaction.user.mention,
                                                file=upload)
+        os.remove(upload_path)
         button.label = "Submitted"
         button.style = nextcord.ButtonStyle.green
         button.disabled = True
         await interaction.message.edit(view=self)
         
-    @nextcord.ui.button(label="C1", custom_id="C1")
+    @nextcord.ui.button(label="C1", custom_id="C1", row=1)
     async def C1(self, button, interaction):
         await self.clipout(button, interaction, 0)
 
-    @nextcord.ui.button(label="C2", custom_id="C2")
+    @nextcord.ui.button(label="C2", custom_id="C2", row=1)
     async def C2(self, button, interaction):
         await self.clipout(button, interaction, 1)
 
-    @nextcord.ui.button(label="C3", custom_id="C3")
+    @nextcord.ui.button(label="C3", custom_id="C3", row=1)
     async def C3(self, button, interaction):
         await self.clipout(button, interaction, 2)
 
-    @nextcord.ui.button(label="C4", custom_id="C4")
+    @nextcord.ui.button(label="C4", custom_id="C4", row=2)
     async def C4(self, button, interaction):
         await self.clipout(button, interaction, 3)
 
-    @nextcord.ui.button(label="C5", custom_id="C5")
+    @nextcord.ui.button(label="C5", custom_id="C5", row=2)
     async def C5(self, button, interaction):
         await self.clipout(button, interaction, 4)
         
-    @nextcord.ui.button(label="C6", custom_id="C6")
+    @nextcord.ui.button(label="C6", custom_id="C6", row=2)
     async def C6(self, button, interaction):
         await self.clipout(button, interaction, 5)
         
@@ -791,6 +793,9 @@ async def add(interaction: nextcord.Interaction):
         return
     if mention_re.search(interaction.message.content.lower()):
         await interaction.send("You can't mention people in prompts.")
+        return
+    if interaction.message.content.lower().strip() == '.add':
+        await interaction.send("You need to give a prompt to generate an image.")
         return
     prompt = interaction.message.content.split(".add")[1].strip()
     seed = generations.get_next_seed()
