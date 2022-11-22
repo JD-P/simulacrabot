@@ -470,7 +470,6 @@ class BatchClipOutGrid(nextcord.ui.View):
         upload = nextcord.File(upload_path)
         await interaction.message.channel.send(interaction.user.mention,
                                                file=upload)
-        os.remove(upload_path)
         button.label = "Submitted"
         button.style = nextcord.ButtonStyle.green
         button.disabled = True
